@@ -1,0 +1,14 @@
+{
+  "name": "armazem-da-cidadania",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Monorepo raiz do Armazém da Cidadania (backend + frontend)",
+  "scripts": {
+    "install:all": "npm install --prefix backend && npm install --prefix frontend",
+    "dev": "concurrently --names \"BACKEND,FRONTEND\" --prefix-colors \"blue,green\" --kill-others \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "build": "npm run build --prefix backend && npm run build --prefix frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}
