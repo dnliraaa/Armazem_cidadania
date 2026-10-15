@@ -1,0 +1,197 @@
+# ============================================================================
+# Supabase self-hosted — Armazém da Cidadania (versão ENXUTA)
+# ============================================================================
+# Baseado no docker-compose oficial do Supabase (github.com/supabase/supabase,
+# pasta docker/), mantendo SÓ o que o sistema usa:
+#
+#   db     Postgres (imagem supabase/postgres, já com os roles anon/authenticated/service_role)
+#   auth   GoTrue — login por e-mail/senha e API administrativa de usuários
+#   rest   PostgREST — o supabase-js do backend usa .from() e .rpc()
+#   kong   API gateway — valida a apikey e roteia /auth/v1 e /rest/v1
+#   meta   postgres-meta — necessário só para o Studio
+#   studio painel web (acesso SÓ por túnel SSH)
+#
+# Ficaram de FORA (o projeto não usa): Realtime, Storage (+ imgproxy), Edge Functions,
+# Analytics/Logflare (+ Vector), Supavisor (pooler) e o Studio exposto no Kong. Menos
+# containers = menos memória (cabe com folga numa VPS de 4 GB) e menos superfície de ataque.
+#
+# REDE: nada fica exposto na internet. O Postgres não publica porta nenhuma; o Kong e o
+# Studio só escutam em 127.0.0.1 (o Nginx do host faz o HTTPS na frente do Kong).
+#
+# VERSÕES: as tags abaixo foram conferidas em 14/10/2026 contra o docker-compose.yml do branch
+# master de github.com/supabase/supabase (pasta docker/). Estão FIXAS de propósito (sem "latest"):
+# o servidor só muda quando VOCÊ atualiza a tag, depois de um backup. Banco novo => Postgres 17.
+#
+# GATEWAY: o master atual trocou o Kong por Envoy (serviço api-gw) e adotou chaves novas
+# (publishable/secret, JWT assimétrico). Este compose mantém o Kong com as chaves legadas HS256
+# (anon/service_role), que o GoTrue e o PostgREST atuais ainda aceitam (GOTRUE_JWT_SECRET,
+# PGRST_JWT_SECRET) — é o que o supabase-js do projeto usa. O Kong foi subido de 2.8.1 (fim de vida)
+# para 3.9.1 com a MESMA configuração declarativa; isso NÃO foi testado aqui. Se o kong não subir,
+# veja "docker compose logs kong" e, como alternativa conhecida, volte a imagem para kong:2.8.1.
+#
+# Uso (dentro de deploy/supabase/, depois de gerar o .env com gerar-segredos.sh):
+#   docker compose up -d
+# ============================================================================
+
+name: armazem-supabase
+
+services:
+  db:
+    container_name: supabase-db
+    image: supabase/postgres:17.6.1.136
+    restart: unless-stopped
+    # SEM "ports:" de propósito — o Postgres só é alcançável pela rede interna do Docker.
+    # Se um dia precisar de acesso local (ex.: DBeaver por túnel SSH), use BIND EM LOOPBACK:
+    #   ports:
+    #     - "127.0.0.1:54322:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      PGPORT: 5432
+      POSTGRES_PORT: 5432
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: postgres
+      POSTGRES_DB: postgres
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXP: ${JWT_EXPIRY}
+    command:
+      [
+        "postgres",
+        "-c", "config_file=/etc/postgresql/postgresql.conf",
+        "-c", "log_min_messages=fatal"
+      ]
+    volumes:
+      # Dados persistentes do Postgres (sobrevivem a recriar/atualizar os containers).
+      - db-data:/var/lib/postgresql/data
+      - db-config:/etc/postgresql-custom
+      # Scripts de primeira inicialização (só rodam com o volume de dados VAZIO):
+      # definem as senhas dos roles internos e o segredo JWT do banco.
+      - ./volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+      - ./volumes/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:ro
+
+  auth:
+    container_name: supabase-auth
+    image: supabase/gotrue:v2.196.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      timeout: 5s
+      interval: 5s
+      retries: 3
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL}
+
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/postgres
+
+      GOTRUE_SITE_URL: ${SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS}
+      # Sistema fechado: ninguém se cadastra sozinho; os usuários são criados por um administrador
+      # (API administrativa, usada pelo backend e por deploy/criar-admin.sh).
+      GOTRUE_DISABLE_SIGNUP: "true"
+
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
+      # Sem servidor de e-mail: os usuários são criados já confirmados (email_confirm: true).
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+
+  rest:
+    container_name: supabase-rest
+    image: postgrest/postgrest:v14.17
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXPIRY}
+    command: ["postgrest"]
+
+  kong:
+    container_name: supabase-kong
+    image: kong/kong:3.9.1
+    restart: unless-stopped
+    # Só no loopback: o Nginx do host (HTTPS) é quem recebe a internet e encaminha para cá.
+    ports:
+      - "127.0.0.1:${KONG_HTTP_PORT}:8000/tcp"
+    depends_on:
+      - auth
+      - rest
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+    volumes:
+      # O kong.yml é um modelo: o entrypoint substitui $SUPABASE_ANON_KEY / $SUPABASE_SERVICE_KEY.
+      - ./volumes/api/kong.yml:/home/kong/temp.yml:ro
+    entrypoint: bash -c 'eval "echo \"$$(cat ~/temp.yml)\"" > ~/kong.yml && /docker-entrypoint.sh kong docker-start'
+
+  meta:
+    container_name: supabase-meta
+    image: supabase/postgres-meta:v0.99.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: postgres
+      PG_META_DB_USER: supabase_admin
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      # Exigida pelas versões atuais do postgres-meta (criptografa strings de conexão). Gerada pelo gerar-segredos.sh.
+      CRYPTO_KEY: ${PG_META_CRYPTO_KEY:?defina PG_META_CRYPTO_KEY no .env (rode gerar-segredos.sh ou veja .env.example)}
+
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:2026.09.07-sha-7996410
+    restart: unless-stopped
+    # NÃO é publicado na internet nem passa pelo Kong/Nginx. Só no loopback do servidor:
+    # acesse por túnel SSH  (ssh -L 3000:127.0.0.1:3000 usuario@servidor) → http://localhost:3000
+    ports:
+      - "127.0.0.1:${STUDIO_PORT}:3000/tcp"
+    depends_on:
+      - meta
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DEFAULT_ORGANIZATION_NAME: Armazém da Cidadania
+      DEFAULT_PROJECT_NAME: Armazém da Cidadania
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: ${API_EXTERNAL_URL}
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      AUTH_JWT_SECRET: ${JWT_SECRET}
+      NEXT_TELEMETRY_DISABLED: "1"
+
+volumes:
+  db-data:
+  db-config:

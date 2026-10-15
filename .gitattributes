@@ -1,0 +1,6 @@
+# Scripts e configs de servidor precisam de quebra de linha Unix (LF), mesmo se editados no Windows.
+*.sh text eol=lf
+*.yml text eol=lf
+*.conf text eol=lf
+deploy/cron/* text eol=lf
+deploy/*.exemplo text eol=lf

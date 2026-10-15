@@ -1,8 +1,12 @@
 /**
  * Script de linha de comando para criar o primeiro funcionário administrador.
  *
- * Uso:
+ * Uso (argumentos):
  *   npm run create-admin -- --nome "Maria Silva" --cpf 12345678900 --email maria@exemplo.com --senha "senhaForte123"
+ *
+ * Uso (variáveis de ambiente, para não deixar a senha na linha de comando / no
+ * histórico do shell — é o que deploy/criar-admin.sh faz):
+ *   ADMIN_NOME, ADMIN_CPF, ADMIN_EMAIL, ADMIN_SENHA
  */
 import "dotenv/config";
 import { supabaseAdmin } from "../src/config/supabase.js";
@@ -15,15 +19,20 @@ function lerArgumento(nome: string): string | undefined {
 }
 
 async function main() {
-  const nome = lerArgumento("nome");
-  const cpfBruto = lerArgumento("cpf");
-  const email = lerArgumento("email");
-  const senha = lerArgumento("senha");
+  const nome = lerArgumento("nome") ?? process.env.ADMIN_NOME;
+  const cpfBruto = lerArgumento("cpf") ?? process.env.ADMIN_CPF;
+  const email = lerArgumento("email") ?? process.env.ADMIN_EMAIL;
+  const senha = lerArgumento("senha") ?? process.env.ADMIN_SENHA;
 
   if (!nome || !cpfBruto || !email || !senha) {
     console.error(
       "Uso: npm run create-admin -- --nome \"Nome Completo\" --cpf 12345678900 --email email@exemplo.com --senha \"senhaForte123\""
     );
+    process.exit(1);
+  }
+
+  if (senha.length < 6) {
+    console.error("Erro: a senha deve ter ao menos 6 caracteres.");
     process.exit(1);
   }
 

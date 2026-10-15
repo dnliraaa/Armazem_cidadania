@@ -60,8 +60,10 @@ create unique index if not exists cidadaos_cpf_key
   on public.cidadaos (cpf)
   where cpf is not null and cpf <> '';
 
-create index if not exists cidadaos_nome_idx on public.cidadaos using gin (nome gin_trgm_ops);
+-- A extensão precisa existir ANTES do índice que usa gin_trgm_ops (num banco novo,
+-- como o Supabase self-hosted, a ordem anterior falhava).
 create extension if not exists pg_trgm;
+create index if not exists cidadaos_nome_idx on public.cidadaos using gin (nome gin_trgm_ops);
 
 comment on table public.cidadaos is 'Cidadãos cadastrados que utilizam os serviços do Armazém da Cidadania';
 

@@ -1,0 +1,11 @@
+{
+  // Build de produção: compila SÓ a pasta src, então o resultado é dist/server.js
+  // (o que o `npm start` e o PM2 executam). Os scripts de linha de comando (scripts/) rodam
+  // direto pelo tsx e não entram no build. O tsconfig.json continua conferindo os tipos de tudo.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"]
+}

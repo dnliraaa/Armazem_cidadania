@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# ============================================================================
+# MODELO do gancho de cópia para FORA do servidor — DESTINO AINDA NÃO ESCOLHIDO.
+#
+# Para ativar: copie para deploy/backup-externo.sh, deixe só UMA das opções abaixo (ajustando o
+# destino), dê permissão de execução (chmod +x deploy/backup-externo.sh) e teste rodando
+# ./deploy/backup.sh à mão. O backup.sh chama este arquivo com o caminho do dump como $1.
+#
+# Os dumps contêm dados pessoais dos cidadãos e os logins: o destino deve ser PRIVADO, e o ideal é
+# criptografar antes de enviar (opção C).
+# ============================================================================
+set -euo pipefail
+ARQUIVO="$1"
+
+# --- Opção A: rclone (Google Drive, S3, Backblaze B2, OneDrive...) --------------------------------
+# Configure uma vez com `rclone config` (cria o remoto, ex.: "meuremoto") e depois:
+#   rclone copy "$ARQUIVO" "DESTINO_A_DEFINIR:armazem-backups/" --transfers 1
+#   # mantém só os últimos 30 dias no destino:
+#   rclone delete "DESTINO_A_DEFINIR:armazem-backups/" --min-age 30d
+
+# --- Opção B: scp/rsync para outra máquina ---------------------------------------------------------
+# Crie uma chave SSH só para backup, sem senha, e autorize-a na outra máquina (ideal: restrita a
+# gravar naquela pasta). Depois:
+#   rsync -a -e "ssh -i /home/USUARIO/.ssh/chave_backup" "$ARQUIVO" USUARIO@MAQUINA_DESTINO_A_DEFINIR:/pasta/de/backups/
+
+# --- Opção C: criptografar antes de enviar (recomendado, combine com A ou B) ----------------------
+#   gpg --batch --yes --pinentry-mode loopback --passphrase-file /root/.senha_backup \
+#       --symmetric --cipher-algo AES256 -o "${ARQUIVO}.gpg" "$ARQUIVO"
+#   ... envie "${ARQUIVO}.gpg" ...  e apague o .gpg local depois.
+
+echo "backup-externo.sh: nenhum destino configurado (edite este arquivo)." >&2
+exit 1

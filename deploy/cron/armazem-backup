@@ -1,0 +1,14 @@
+# Backup diário do banco do Armazém da Cidadania — todo dia às 03:15.
+#
+# Instalação:
+#   1) Troque "deploy" abaixo pelo usuário que roda o sistema (o mesmo que usa o docker e o PM2).
+#   2) Ajuste o caminho se o projeto não estiver em /opt/armazem-da-cidadania.
+#   3) sudo cp deploy/cron/armazem-backup /etc/cron.d/armazem-backup
+#      sudo chmod 644 /etc/cron.d/armazem-backup
+#   4) sudo mkdir -p /var/log/armazem /var/backups/armazem && sudo chown deploy: /var/log/armazem /var/backups/armazem
+#
+# (Arquivos em /etc/cron.d precisam do nome do usuário no 6º campo; sem extensão no nome do arquivo.)
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+15 3 * * * deploy /opt/armazem-da-cidadania/deploy/backup.sh >> /var/log/armazem/backup.log 2>&1

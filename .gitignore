@@ -4,3 +4,15 @@ dist/
 *.log
 .DS_Store
 .claude/
+
+# --- Deploy / segredos / dados (nunca versionar) ---
+.env.*
+!.env.example
+!.env.production.example
+deploy/supabase/.env
+deploy/supabase/volumes/db/data/
+*.dump
+*.dump.gz
+*.sql.gz
+backups/
+deploy/backup-externo.sh

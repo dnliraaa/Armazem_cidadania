@@ -1,0 +1,100 @@
+# Configuração declarativa do Kong (gateway do Supabase) — Armazém da Cidadania.
+#
+# É um MODELO: o entrypoint do container passa o arquivo por uma expansão de shell que
+# troca as variáveis das linhas key (abaixo) pelas chaves do .env. Por isso este arquivo
+# NÃO pode ter aspas duplas, crases nem outro cifrão além dos dois das linhas key.
+#
+# Só duas famílias de rotas existem, as que o sistema usa:
+#   /auth/v1/*  → GoTrue (login do frontend; API admin do backend)
+#   /rest/v1/*  → PostgREST (supabase-js do backend)
+# Studio e postgres-meta NÃO passam pelo Kong (o Studio é acessado por túnel SSH).
+#
+# Na internet o Nginx só deixa passar /auth/v1/ (ver deploy/nginx/armazemdacidadania.conf);
+# /rest/v1/ só é alcançado pelo backend, em 127.0.0.1.
+
+_format_version: '2.1'
+_transform: true
+
+consumers:
+  - username: anon
+    keyauth_credentials:
+      - key: $SUPABASE_ANON_KEY
+  - username: service_role
+    keyauth_credentials:
+      - key: $SUPABASE_SERVICE_KEY
+
+acls:
+  - consumer: anon
+    group: anon
+  - consumer: service_role
+    group: admin
+
+services:
+  ## Rotas abertas do GoTrue (links de confirmação/recuperação; não usadas hoje, mas pertencem ao fluxo padrão)
+  - name: auth-v1-open
+    url: http://auth:9999/verify
+    routes:
+      - name: auth-v1-open
+        strip_path: true
+        paths:
+          - /auth/v1/verify
+    plugins:
+      - name: cors
+  - name: auth-v1-open-callback
+    url: http://auth:9999/callback
+    routes:
+      - name: auth-v1-open-callback
+        strip_path: true
+        paths:
+          - /auth/v1/callback
+    plugins:
+      - name: cors
+  - name: auth-v1-open-authorize
+    url: http://auth:9999/authorize
+    routes:
+      - name: auth-v1-open-authorize
+        strip_path: true
+        paths:
+          - /auth/v1/authorize
+    plugins:
+      - name: cors
+
+  ## Auth (GoTrue): login por senha, refresh de token, /user e API administrativa
+  - name: auth-v1
+    url: http://auth:9999/
+    routes:
+      - name: auth-v1-all
+        strip_path: true
+        paths:
+          - /auth/v1/
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: false
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  ## REST (PostgREST): .from() e .rpc() do supabase-js
+  - name: rest-v1
+    url: http://rest:3000/
+    routes:
+      - name: rest-v1-all
+        strip_path: true
+        paths:
+          - /rest/v1/
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: true
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
