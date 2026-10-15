@@ -29,21 +29,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      setSession(data.session);
-      if (data.session) {
-        await carregarFuncionario();
-      }
-      setCarregando(false);
-    });
-
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, novaSession) => {
-      setSession(novaSession);
-      if (novaSession) {
-        await carregarFuncionario();
-      } else {
+    supabase.auth
+      .getSession()
+      .then(async ({ data }) => {
+        setSession(data.session);
+        if (data.session) {
+          await carregarFuncionario();
+        }
+      })
+      .catch(() => {
+        setSession(null);
         setFuncionario(null);
-      }
+      })
+      .finally(() => setCarregando(false));
+
+    // Não chamar o Supabase (nem a API, que lê a sessão) de dentro deste callback: o supabase-js
+    // segura um lock durante ele e a chamada ficaria esperando para sempre (carregamento infinito).
+    // Por isso o trabalho é adiado com setTimeout.
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, novaSession) => {
+      setSession(novaSession);
+      setTimeout(() => {
+        if (novaSession) {
+          void carregarFuncionario();
+        } else {
+          setFuncionario(null);
+        }
+      }, 0);
     });
 
     return () => listener.subscription.unsubscribe();
@@ -59,7 +70,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function sair() {
-    await supabase.auth.signOut();
+    // scope local: sair aqui não derruba a mesma conta aberta em outros aparelhos.
+    await supabase.auth.signOut({ scope: "local" });
   }
 
   return (
