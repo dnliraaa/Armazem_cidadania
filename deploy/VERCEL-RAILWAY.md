@@ -60,7 +60,7 @@ antes de cadastrar qualquer cartão.
 4. **Settings → Networking → Generate Domain** → anote a URL pública (algo como `https://armazem-backend-production.up.railway.app`).
 5. Teste: abra `https://SUA-URL-DO-RAILWAY/api/health` → deve mostrar `{"ok":true,...}`.
 
-> O `railway.json` instala também as dependências de desenvolvimento no build (`npm ci --include=dev`), porque o TypeScript é necessário para compilar
+> O `backend/nixpacks.toml` instala também as dependências de desenvolvimento (`npm ci --include=dev`), porque o TypeScript é necessário para compilar
 > e, com `NODE_ENV=production` definido, o instalador padrão as omitiria e o build falharia.
 
 ## 3. Vercel — frontend

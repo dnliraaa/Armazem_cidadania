@@ -1,0 +1,6 @@
+[phases.install]
+# Inclui devDependencies (TypeScript) mesmo com NODE_ENV=production.
+cmds = ["npm ci --include=dev"]
+
+[phases.build]
+cmds = ["npm run build"]
