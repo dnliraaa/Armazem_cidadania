@@ -1,3 +1,27 @@
+/** Módulos da plataforma: Armazém da Cidadania (por unidade) e Armazém Itinerante (por ação itinerante). */
+export type Modulo = "armazem" | "itinerante";
+
+/** Contexto de módulo de uma requisição operacional (vem dos headers X-Modulo e X-Acao-Id). */
+export interface ContextoModulo {
+  modulo: Modulo;
+  /** Obrigatório no Itinerante para quem não é admin; sempre null no Armazém. */
+  acaoId: string | null;
+}
+
+/** Ação do Armazém Itinerante: faz o papel da unidade no módulo Itinerante. */
+export interface AcaoItinerante {
+  id: string;
+  nome: string;
+  descricao: string | null;
+  local: string | null;
+  data_inicio: string;
+  data_fim: string;
+  ativo: boolean;
+  criado_por: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Funcionario {
   id: string;
   nome: string;
@@ -9,6 +33,10 @@ export interface Funcionario {
   unidade_id: string | null;
   /** Obrigatório (validado na aplicação) quando role = "nucleo". */
   nucleo_id: string | null;
+  /** Acesso ao módulo Armazém da Cidadania. O nível admin tem acesso aos dois módulos sempre. */
+  acesso_armazem: boolean;
+  /** Acesso ao módulo Armazém Itinerante. */
+  acesso_itinerante: boolean;
   ativo: boolean;
   created_at: string;
   updated_at: string;
@@ -36,8 +64,13 @@ export interface Totem {
 export interface Cidadao {
   id: string;
   nome: string;
+  /** Se preenchido, é o nome chamado no painel. */
+  nome_social?: string | null;
   cpf: string | null;
   data_nascimento: string;
+  /** Vazio em cadastros antigos; obrigatório nos novos (validado na aplicação). */
+  nome_mae?: string | null;
+  /** Só dígitos (DDD + número) nos cadastros novos. */
   telefone: string;
   criado_por: string | null;
   created_at: string;
@@ -52,6 +85,17 @@ export interface Nucleo {
   created_at: string;
   updated_at: string;
   demandas: Demanda[];
+}
+
+/** Serviço externo para o qual um núcleo encaminha o cidadão (cadastrado pelo administrador). */
+export interface ServicoExterno {
+  id: string;
+  nucleo_id: string;
+  nome: string;
+  ativo: boolean;
+  criado_por: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Demanda {
@@ -112,6 +156,11 @@ export interface Atendimento {
   unidade_id?: string | null;
   /** Texto livre opcional de como foi o atendimento, preenchido pelo núcleo. */
   descricao?: string | null;
+  /** Nova ficha do núcleo. Nulos em registros antigos, que usam só `houve_encaminhamento`. */
+  motivo_nao_resolvida?: string | null;
+  houve_encaminhamento_externo?: boolean | null;
+  encaminhamento_externo_outros?: string | null;
+  houve_encaminhamento_interno?: boolean | null;
   data_atendimento: string | null;
   created_at: string;
   updated_at: string;
@@ -141,6 +190,8 @@ declare global {
   namespace Express {
     interface Request {
       funcionario?: Funcionario;
+      /** Preenchido por `resolverContextoModulo` nas rotas operacionais. */
+      contexto?: ContextoModulo;
     }
   }
 }

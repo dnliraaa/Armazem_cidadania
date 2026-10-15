@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { api, ApiError } from "../../lib/api";
-import type { AtendimentoPendente, Nucleo } from "../../types";
+import type { AtendimentoPendente, Nucleo, ServicoExterno } from "../../types";
+import { FichaEncaminhamentosCampos } from "../atendimentos/FichaEncaminhamentosCampos";
+import { fichaParaPayload, fichaVazia, validarFicha, type FichaForm } from "../atendimentos/fichaAtendimento";
 import { PendenteFormCampos } from "../atendimentos/PendenteFormCampos";
 
 const INTERVALO_ATUALIZACAO_MS = 4000;
@@ -30,20 +32,31 @@ function formatarHora(iso: string): string {
 interface AtendimentoEmCursoProps {
   pendente: AtendimentoPendente;
   nucleo: Nucleo | undefined;
+  /** Todos os núcleos (candidatos a encaminhamento interno, exceto o do próprio atendimento). */
+  nucleos: Nucleo[];
   onFinalizado: () => void;
 }
 
-/** Formulário do cidadão chamado: o núcleo preenche as demandas e finaliza (vira atendimento definitivo). */
-function AtendimentoEmCurso({ pendente, nucleo, onFinalizado }: AtendimentoEmCursoProps) {
+/** Formulário do cidadão chamado: o núcleo preenche a ficha e finaliza (vira atendimento definitivo). */
+function AtendimentoEmCurso({ pendente, nucleo, nucleos, onFinalizado }: AtendimentoEmCursoProps) {
   const [demandaPrincipalId, setDemandaPrincipalId] = useState(pendente.demanda_principal_id ?? "");
   const [outrasDemandas, setOutrasDemandas] = useState<string[]>(pendente.outras_demandas ?? []);
-  const [resolvida, setResolvida] = useState(Boolean(pendente.resolvida));
-  const [houveEncaminhamento, setHouveEncaminhamento] = useState(Boolean(pendente.houve_encaminhamento));
+  const [ficha, setFicha] = useState<FichaForm>(fichaVazia);
+  const [servicos, setServicos] = useState<ServicoExterno[]>([]);
   const [descricao, setDescricao] = useState("");
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
   const demandas = nucleo?.demandas.filter((d) => d.ativo) ?? [];
+  const nucleosDestino = nucleos.filter((n) => n.ativo && n.id !== pendente.nucleo_id);
+
+  // Serviços externos cadastrados para o núcleo deste atendimento (só os ativos podem ser escolhidos).
+  useEffect(() => {
+    api
+      .get<ServicoExterno[]>(`/servicos-externos?nucleo_id=${pendente.nucleo_id}`)
+      .then((dados) => setServicos(dados.filter((s) => s.ativo)))
+      .catch(() => setErro("Não foi possível carregar os serviços externos."));
+  }, [pendente.nucleo_id]);
 
   function handleToggleOutraDemanda(id: string) {
     setOutrasDemandas((atual) => (atual.includes(id) ? atual.filter((d) => d !== id) : [...atual, id]));
@@ -54,16 +67,24 @@ function AtendimentoEmCurso({ pendente, nucleo, onFinalizado }: AtendimentoEmCur
       setErro("Selecione a demanda principal.");
       return;
     }
+    const erroFicha = validarFicha(ficha);
+    if (erroFicha) {
+      setErro(erroFicha);
+      return;
+    }
     setErro(null);
     setEnviando(true);
     try {
       await api.put(`/atendimentos/pendentes/${pendente.id}`, {
         demanda_principal_id: demandaPrincipalId,
         outras_demandas: outrasDemandas.filter((id) => id !== demandaPrincipalId),
-        resolvida,
-        houve_encaminhamento: houveEncaminhamento,
       });
-      await api.post(`/atendimentos/pendentes/${pendente.id}/confirmar`, { descricao: descricao.trim() || null });
+      // A ficha (resolvida/motivo e encaminhamentos) vai direto na conclusão; o backend valida e
+      // cria as solicitações dos núcleos de destino junto com o atendimento.
+      await api.post(`/atendimentos/pendentes/${pendente.id}/confirmar`, {
+        descricao: descricao.trim() || null,
+        ...fichaParaPayload(ficha),
+      });
       onFinalizado();
     } catch (err) {
       setErro(err instanceof ApiError ? err.message : "Não foi possível finalizar o atendimento.");
@@ -102,10 +123,14 @@ function AtendimentoEmCurso({ pendente, nucleo, onFinalizado }: AtendimentoEmCur
         onDemandaPrincipalChange={setDemandaPrincipalId}
         outrasDemandas={outrasDemandas}
         onToggleOutraDemanda={handleToggleOutraDemanda}
-        resolvida={resolvida}
-        onResolvidaChange={setResolvida}
-        houveEncaminhamento={houveEncaminhamento}
-        onHouveEncaminhamentoChange={setHouveEncaminhamento}
+        blocoResolucao={
+          <FichaEncaminhamentosCampos
+            ficha={ficha}
+            onChange={setFicha}
+            servicos={servicos}
+            nucleosDestino={nucleosDestino}
+          />
+        }
         descricao={descricao}
         onDescricaoChange={setDescricao}
       />
@@ -245,6 +270,7 @@ export function FilaNucleoPage() {
           key={meuAtendimento.id}
           pendente={meuAtendimento}
           nucleo={nucleoAtual}
+          nucleos={nucleos}
           onFinalizado={carregarFila}
         />
       ) : (

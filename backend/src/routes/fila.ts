@@ -9,10 +9,11 @@ import {
   retirarSenha,
 } from "../controllers/filaController.js";
 import { exigirAutenticacao, exigirNivel } from "../middleware/auth.js";
+import { resolverContextoModulo } from "../middleware/contexto.js";
 
 const router = Router();
 
-router.use(exigirAutenticacao);
+router.use(exigirAutenticacao, resolverContextoModulo);
 
 // Retirar senha é exclusivo do totem, operado pela infraestrutura (e só nos
 // totens da própria unidade — conferido no controller).

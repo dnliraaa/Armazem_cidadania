@@ -45,6 +45,12 @@ export function formatarTelefoneInput(valor: string): string {
     .replace(/(\d{5})(\d)/, "$1-$2");
 }
 
+/** Telefone para exibição ("(00) 00000-0000"); "—" quando vazio. */
+export function formatarTelefone(valor?: string | null): string {
+  if (!valor || !somenteDigitos(valor)) return "—";
+  return formatarTelefoneInput(valor);
+}
+
 export function formatarDataBr(isoDate: string): string {
   if (!isoDate) return "";
   const [ano, mes, dia] = isoDate.split("-");

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
+import { useModulo } from "../../contexts/ModuloContext";
 import { api, ApiError } from "../../lib/api";
 import { IconNucleo, IconSala } from "../../components/icons";
 import type { ChamadaPainel, RespostaPainel, Unidade } from "../../types";
@@ -175,8 +176,11 @@ function ConfigurarPainel({ onConfigurado }: { onConfigurado: (unidade: Unidade)
  */
 export function PainelPage() {
   const { sair, funcionario } = useAuth();
-  // Esta tela é do nível infraestrutura: a unidade é sempre a dele, sem seleção nem troca.
-  const unidadeFixa = funcionario?.unidade_id ?? null;
+  const { modulo, acao, base } = useModulo();
+  const itinerante = modulo === "itinerante";
+  // Esta tela é do nível infraestrutura: no Armazém a unidade é sempre a dele, sem seleção nem
+  // troca; no Itinerante não há unidade — o painel é da ação em uso.
+  const unidadeFixa = itinerante ? null : funcionario?.unidade_id ?? null;
   const [unidadeId, setUnidadeId] = useState<string | null>(() => unidadeFixa ?? lerUnidadeSalva());
   const [unidadeNome, setUnidadeNome] = useState<string | null>(null);
   const [painel, setPainel] = useState<RespostaPainel | null>(null);
@@ -195,7 +199,7 @@ export function PainelPage() {
   // busca o nome dela de novo — e, se ela não existir mais (foi removida ou
   // desativada), pede para configurar de novo.
   useEffect(() => {
-    if (!unidadeId || unidadeNome) return;
+    if (itinerante || !unidadeId || unidadeNome) return;
     api
       .get<Unidade[]>("/unidades")
       .then((unidades) => {
@@ -211,16 +215,16 @@ export function PainelPage() {
         // Falha de rede momentânea: mantém a unidade configurada, só não
         // mostra o nome agora.
       });
-  }, [unidadeId, unidadeNome]);
+  }, [itinerante, unidadeId, unidadeNome]);
 
   useEffect(() => {
-    if (!unidadeId) return;
+    if (!itinerante && !unidadeId) return;
 
     let cancelado = false;
 
     async function carregar() {
       try {
-        const dados = await api.get<RespostaPainel>(`/painel?unidade_id=${unidadeId}`);
+        const dados = await api.get<RespostaPainel>(itinerante ? "/painel" : `/painel?unidade_id=${unidadeId}`);
         if (cancelado) return;
         setPainel(dados);
 
@@ -245,7 +249,7 @@ export function PainelPage() {
       cancelado = true;
       clearInterval(intervalo);
     };
-  }, [unidadeId]);
+  }, [itinerante, unidadeId]);
 
   useEffect(() => {
     if (!mostrarControles) return;
@@ -253,7 +257,7 @@ export function PainelPage() {
     return () => clearTimeout(t);
   }, [mostrarControles]);
 
-  if (!unidadeId) {
+  if (!itinerante && !unidadeId) {
     return <ConfigurarPainel onConfigurado={handleConfigurado} />;
   }
 
@@ -276,7 +280,7 @@ export function PainelPage() {
       `}</style>
 
       <p style={{ position: "absolute", top: 20, left: 24, color: "var(--cor-texto-suave)", fontSize: "1rem" }}>
-        {unidadeNome}
+        {itinerante ? acao?.nome : unidadeNome}
       </p>
 
       <div style={{ width: "100%", maxWidth: 1200 }}>
@@ -393,7 +397,7 @@ export function PainelPage() {
       />
       {mostrarControles && (
         <div style={{ position: "absolute", bottom: 16, right: 16, display: "flex", gap: "0.5rem" }}>
-          <Link to="/infraestrutura" className="btn btn-secundario btn-pequeno">
+          <Link to={`${base}/infraestrutura`} className="btn btn-secundario btn-pequeno">
             Menu
           </Link>
           <button className="btn btn-secundario btn-pequeno" onClick={sair}>

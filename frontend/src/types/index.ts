@@ -1,3 +1,36 @@
+/** Módulos da plataforma: Armazém da Cidadania (por unidade) e Armazém Itinerante (por ação itinerante). */
+export type Modulo = "armazem" | "itinerante";
+
+/** Ação do Armazém Itinerante: faz o papel da unidade no módulo Itinerante. */
+export interface AcaoItinerante {
+  id: string;
+  nome: string;
+  descricao: string | null;
+  local: string | null;
+  data_inicio: string;
+  data_fim: string;
+  ativo: boolean;
+  criado_por?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  // Calculados pelo backend em /api/acoes-itinerantes.
+  situacao?: "em_andamento" | "futura" | "encerrada";
+  em_andamento?: boolean;
+}
+
+/** Resposta de GET /api/modulos-disponiveis. */
+export interface ModulosDisponiveis {
+  armazem: boolean;
+  itinerante: {
+    /** Tem acesso ao módulo (admin sempre). */
+    acesso: boolean;
+    /** Pode entrar agora (não-admin só com ação em andamento; admin sempre). */
+    disponivel: boolean;
+    /** Ações em andamento hoje. */
+    acoes: AcaoItinerante[];
+  };
+}
+
 export interface Funcionario {
   id: string;
   nome: string;
@@ -9,6 +42,10 @@ export interface Funcionario {
   unidade_id: string | null;
   /** Obrigatório (validado na aplicação) quando role = "nucleo". */
   nucleo_id: string | null;
+  /** Acesso ao módulo Armazém da Cidadania. O nível admin tem acesso aos dois módulos sempre. */
+  acesso_armazem: boolean;
+  /** Acesso ao módulo Armazém Itinerante. */
+  acesso_itinerante: boolean;
   ativo: boolean;
   created_at: string;
   updated_at: string;
@@ -30,7 +67,10 @@ export interface Unidade {
 export interface Totem {
   id: string;
   nome: string;
-  unidade_id: string;
+  /** Nulo nos totens do Itinerante (que pertencem a uma ação, não a uma unidade). */
+  unidade_id: string | null;
+  modulo?: Modulo;
+  acao_itinerante_id?: string | null;
   ativo: boolean;
   created_at: string;
   updated_at: string;
@@ -41,8 +81,13 @@ export interface Totem {
 export interface Cidadao {
   id: string;
   nome: string;
+  /** Se preenchido, é o nome chamado no painel. */
+  nome_social?: string | null;
   cpf: string | null;
   data_nascimento: string;
+  /** Vazio em cadastros antigos; obrigatório nos novos (validado na aplicação). */
+  nome_mae?: string | null;
+  /** Só dígitos (DDD + número) nos cadastros novos. */
   telefone: string;
   criado_por: string | null;
   created_at: string;
@@ -57,6 +102,17 @@ export interface Nucleo {
   created_at: string;
   updated_at: string;
   demandas: Demanda[];
+}
+
+/** Serviço externo para o qual um núcleo encaminha o cidadão (cadastrado pelo administrador). */
+export interface ServicoExterno {
+  id: string;
+  nucleo_id: string;
+  nome: string;
+  ativo: boolean;
+  criado_por: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Demanda {
@@ -119,6 +175,14 @@ export interface Atendimento {
   unidade_id?: string | null;
   /** Texto livre opcional de como foi o atendimento, preenchido pelo núcleo. */
   descricao?: string | null;
+  /** Nova ficha do núcleo. Nulos em registros antigos, que usam só `houve_encaminhamento`. */
+  motivo_nao_resolvida?: string | null;
+  houve_encaminhamento_externo?: boolean | null;
+  encaminhamento_externo_outros?: string | null;
+  houve_encaminhamento_interno?: boolean | null;
+  // Calculados pelo backend (GET /api/atendimentos), não existem na tabela.
+  servicos_externos?: { id: string; nome: string }[];
+  encaminhamentos_internos?: { nucleo_id: string; nucleo_nome: string; pendente_gerado_id: string | null }[];
   data_atendimento: string | null;
   created_at: string;
   updated_at: string;

@@ -18,14 +18,18 @@ interface Props {
   onSalvo: (cidadao: Cidadao) => void;
 }
 
+const maiusculo = (valor: string) => valor.toLocaleUpperCase("pt-BR");
+
 export function CidadaoFormModal({ cidadao, valoresIniciais, onFechar, onSalvo }: Props) {
   const editando = Boolean(cidadao);
-  const [nome, setNome] = useState((cidadao?.nome ?? valoresIniciais?.nome ?? "").toLocaleUpperCase("pt-BR"));
+  const [nome, setNome] = useState(maiusculo(cidadao?.nome ?? valoresIniciais?.nome ?? ""));
+  const [nomeSocial, setNomeSocial] = useState(maiusculo(cidadao?.nome_social ?? ""));
+  const [dataNascimento, setDataNascimento] = useState(cidadao?.data_nascimento ?? valoresIniciais?.data_nascimento ?? "");
+  const [nomeMae, setNomeMae] = useState(maiusculo(cidadao?.nome_mae ?? ""));
+  const [telefone, setTelefone] = useState(cidadao ? formatarTelefoneInput(cidadao.telefone) : "");
   const [cpf, setCpf] = useState(
     cidadao?.cpf ? formatarCpfInput(cidadao.cpf) : formatarCpfInput(valoresIniciais?.cpf ?? "")
   );
-  const [dataNascimento, setDataNascimento] = useState(cidadao?.data_nascimento ?? valoresIniciais?.data_nascimento ?? "");
-  const [telefone, setTelefone] = useState(cidadao ? formatarTelefoneInput(cidadao.telefone) : "");
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
@@ -34,7 +38,14 @@ export function CidadaoFormModal({ cidadao, valoresIniciais, onFechar, onSalvo }
     setErro(null);
     setEnviando(true);
     try {
-      const payload = { nome, cpf, data_nascimento: dataNascimento, telefone };
+      const payload = {
+        nome,
+        nome_social: nomeSocial.trim() || null,
+        data_nascimento: dataNascimento,
+        nome_mae: nomeMae,
+        telefone,
+        cpf,
+      };
       const salvo =
         editando && cidadao
           ? await api.put<Cidadao>(`/cidadaos/${cidadao.id}`, payload)
@@ -57,22 +68,19 @@ export function CidadaoFormModal({ cidadao, valoresIniciais, onFechar, onSalvo }
         <form onSubmit={handleSubmit}>
           <div className="campo">
             <label htmlFor="nome">Nome completo</label>
-            <input
-              id="nome"
-              required
-              value={nome}
-              onChange={(e) => setNome(e.target.value.toLocaleUpperCase("pt-BR"))}
-            />
+            <input id="nome" required value={nome} onChange={(e) => setNome(maiusculo(e.target.value))} />
           </div>
 
           <div className="campo">
-            <label htmlFor="cpf">CPF (opcional)</label>
+            <label htmlFor="nomeSocial">Nome social (opcional)</label>
             <input
-              id="cpf"
-              value={cpf}
-              onChange={(e) => setCpf(formatarCpfInput(e.target.value))}
-              placeholder="000.000.000-00"
+              id="nomeSocial"
+              value={nomeSocial}
+              onChange={(e) => setNomeSocial(maiusculo(e.target.value))}
             />
+            <span style={{ fontSize: "0.8rem", color: "var(--cor-texto-suave)" }}>
+              Preencha só se a pessoa usa outro nome; será o nome chamado no painel.
+            </span>
           </div>
 
           <div className="campo">
@@ -87,6 +95,11 @@ export function CidadaoFormModal({ cidadao, valoresIniciais, onFechar, onSalvo }
           </div>
 
           <div className="campo">
+            <label htmlFor="nomeMae">Nome da mãe</label>
+            <input id="nomeMae" required value={nomeMae} onChange={(e) => setNomeMae(maiusculo(e.target.value))} />
+          </div>
+
+          <div className="campo">
             <label htmlFor="telefone">Telefone</label>
             <input
               id="telefone"
@@ -94,6 +107,16 @@ export function CidadaoFormModal({ cidadao, valoresIniciais, onFechar, onSalvo }
               value={telefone}
               onChange={(e) => setTelefone(formatarTelefoneInput(e.target.value))}
               placeholder="(00) 00000-0000"
+            />
+          </div>
+
+          <div className="campo">
+            <label htmlFor="cpf">CPF (opcional)</label>
+            <input
+              id="cpf"
+              value={cpf}
+              onChange={(e) => setCpf(formatarCpfInput(e.target.value))}
+              placeholder="000.000.000-00"
             />
           </div>
 

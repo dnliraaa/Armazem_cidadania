@@ -10,16 +10,28 @@ const cpfOpcional = z
   .or(z.literal(""))
   .refine((valor) => !valor || cpfValido(valor), "CPF inválido.");
 
+const maiusculo = (texto: string) => texto.toLocaleUpperCase("pt-BR");
+
 const criarCidadaoSchema = z.object({
-  // O nome do cidadão é sempre gravado em maiúsculo, independente de como foi digitado.
-  nome: z
+  // Os nomes (completo, social e da mãe) são sempre gravados em maiúsculo, independente de como foram digitados.
+  nome: z.string().trim().min(3, "Informe o nome completo.").transform(maiusculo),
+  // Opcional: se preenchido, é o nome chamado no painel. Vazio vira null.
+  nome_social: z
     .string()
     .trim()
-    .min(3, "Informe o nome completo.")
-    .transform((nome) => nome.toLocaleUpperCase("pt-BR")),
+    .max(150, "O nome social é longo demais.")
+    .optional()
+    .nullable()
+    .transform((valor) => (valor ? maiusculo(valor) : null)),
   cpf: cpfOpcional,
   data_nascimento: z.string().refine((v) => !Number.isNaN(Date.parse(v)), "Data de nascimento inválida."),
-  telefone: z.string().trim().min(8, "Informe um telefone válido."),
+  nome_mae: z.string().trim().min(3, "Informe o nome da mãe.").transform(maiusculo),
+  // Guardado só com dígitos (DDD + número: 10 ou 11 dígitos), como o CPF.
+  telefone: z
+    .string()
+    .trim()
+    .transform(somenteDigitos)
+    .refine((digitos) => /^[1-9][1-9]\d{8,9}$/.test(digitos), "Informe um telefone válido com DDD."),
 });
 
 const atualizarCidadaoSchema = criarCidadaoSchema.partial();
@@ -55,8 +67,10 @@ export async function listarCidadaos(req: Request, res: Response) {
     query = query.eq("cpf", cpfParam);
   } else if (nomeParam || nascimentoParam) {
     if (nomeParam) {
-      // Escapa os curingas do LIKE para o nome digitado ser tratado literalmente.
-      query = query.ilike("nome", `%${nomeParam.replace(/[\\%_]/g, "\\$&")}%`);
+      // Casa com o nome completo OU com o nome social. Os curingas do LIKE são escapados
+      // (o nome digitado é tratado literalmente) e o valor é protegido para o `.or()`.
+      const padrao = escaparValorFiltroOr(`%${nomeParam.replace(/[\\%_]/g, "\\$&")}%`);
+      query = query.or(`nome.ilike.${padrao},nome_social.ilike.${padrao}`);
     }
     if (nascimentoParam) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(nascimentoParam)) {
@@ -68,9 +82,10 @@ export async function listarCidadaos(req: Request, res: Response) {
     const buscaCpf = somenteDigitos(busca);
     if (buscaCpf.length >= 3) {
       const nomeFiltro = escaparValorFiltroOr(`%${busca}%`);
-      query = query.or(`nome.ilike.${nomeFiltro},cpf.ilike.%${buscaCpf}%`);
+      query = query.or(`nome.ilike.${nomeFiltro},nome_social.ilike.${nomeFiltro},cpf.ilike.%${buscaCpf}%`);
     } else {
-      query = query.ilike("nome", `%${busca}%`);
+      const nomeFiltro = escaparValorFiltroOr(`%${busca}%`);
+      query = query.or(`nome.ilike.${nomeFiltro},nome_social.ilike.${nomeFiltro}`);
     }
   }
 
@@ -125,8 +140,10 @@ export async function criarCidadao(req: Request, res: Response) {
     .from("cidadaos")
     .insert({
       nome: parse.data.nome,
+      nome_social: parse.data.nome_social,
       cpf,
       data_nascimento: parse.data.data_nascimento,
+      nome_mae: parse.data.nome_mae,
       telefone: parse.data.telefone,
       criado_por: req.funcionario?.id ?? null,
     })

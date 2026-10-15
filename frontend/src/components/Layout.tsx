@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import logoBranca from "../assets/logo2.png";
 import { useAuth } from "../contexts/AuthContext";
+import { useModulo } from "../contexts/ModuloContext";
 import { nivelPermitido } from "../lib/acesso";
+import type { Modulo } from "../types";
 import {
   IconAtendimentos,
   IconCidadaos,
@@ -16,39 +18,45 @@ import {
 import "../styles/layout.css";
 
 // `niveis` segue o mesmo critério das rotas em App.tsx ("amplo" = admin/atendente).
-const links = [
-  { to: "/funcionarios", label: "Funcionários", Icon: IconFuncionarios, disponivel: true, niveis: ["amplo"] },
-  { to: "/cidadaos", label: "Cidadãos", Icon: IconCidadaos, disponivel: true, niveis: ["amplo"] },
-  { to: "/formularios", label: "Formulários", Icon: IconFormularios, disponivel: true, niveis: ["amplo"] },
-  { to: "/atendimentos", label: "Atendimentos", Icon: IconAtendimentos, disponivel: true, niveis: ["amplo"] },
+// `modulos` limita o item a um módulo (sem ele, aparece nos dois). `sufixo` é somado ao
+// prefixo do módulo atual (/armazem ou /itinerante).
+const links: {
+  sufixo: string;
+  label: string;
+  Icon: typeof IconUnidades;
+  niveis: string[];
+  modulos?: Modulo[];
+}[] = [
+  { sufixo: "/funcionarios", label: "Funcionários", Icon: IconFuncionarios, niveis: ["amplo"] },
+  { sufixo: "/cidadaos", label: "Cidadãos", Icon: IconCidadaos, niveis: ["amplo"] },
+  { sufixo: "/formularios", label: "Formulários", Icon: IconFormularios, niveis: ["amplo"] },
+  { sufixo: "/atendimentos", label: "Atendimentos", Icon: IconAtendimentos, niveis: ["amplo"] },
   // Recepção e Fila do Núcleo: o admin não opera filas; o "atendente" mantém o acesso.
-  { to: "/recepcao", label: "Recepção", Icon: IconRecepcao, disponivel: true, niveis: ["recepcao", "atendente"] },
-  {
-    to: "/fila-nucleo",
-    label: "Fila do Núcleo",
-    Icon: IconFilaNucleo,
-    disponivel: true,
-    niveis: ["nucleo", "atendente"],
-  },
-  {
-    to: "/atendimentos-historico",
-    label: "Histórico de Atendimentos",
-    Icon: IconAtendimentos,
-    disponivel: true,
-    niveis: ["nucleo"],
-  },
-  { to: "/unidades", label: "Unidades", Icon: IconUnidades, disponivel: true, niveis: ["amplo"] },
-  // Infraestrutura: só o início e as duas telas de quiosque da sua unidade.
-  { to: "/infraestrutura", label: "Início", Icon: IconUnidades, disponivel: true, niveis: ["infraestrutura"] },
-  { to: "/totem", label: "Totem", Icon: IconRecepcao, disponivel: true, niveis: ["infraestrutura"] },
-  { to: "/painel", label: "Painel", Icon: IconFilaNucleo, disponivel: true, niveis: ["infraestrutura"] },
+  { sufixo: "/recepcao", label: "Recepção", Icon: IconRecepcao, niveis: ["recepcao", "atendente"] },
+  { sufixo: "/fila-nucleo", label: "Fila do Núcleo", Icon: IconFilaNucleo, niveis: ["nucleo", "atendente"] },
+  { sufixo: "/atendimentos-historico", label: "Histórico de Atendimentos", Icon: IconAtendimentos, niveis: ["nucleo"] },
+  // Exclusivos de cada módulo: unidades só existem no Armazém; ações só no Itinerante (admin).
+  { sufixo: "/unidades", label: "Unidades", Icon: IconUnidades, niveis: ["amplo"], modulos: ["armazem"] },
+  { sufixo: "/acoes", label: "Ações Itinerantes", Icon: IconUnidades, niveis: ["admin"], modulos: ["itinerante"] },
+  // Infraestrutura: só o início e as duas telas de quiosque da sua unidade/ação.
+  { sufixo: "/infraestrutura", label: "Início", Icon: IconUnidades, niveis: ["infraestrutura"] },
+  { sufixo: "/totem", label: "Totem", Icon: IconRecepcao, niveis: ["infraestrutura"] },
+  { sufixo: "/painel", label: "Painel", Icon: IconFilaNucleo, niveis: ["infraestrutura"] },
 ];
 
 export function Layout() {
   const { funcionario, sair } = useAuth();
+  const { modulo, acao, base } = useModulo();
+  const navigate = useNavigate();
   const [menuAberto, setMenuAberto] = useState(false);
   // Sem o cadastro carregado ainda, não mostra item nenhum (evita piscar o menu completo).
-  const linksVisiveis = funcionario ? links.filter((l) => nivelPermitido(funcionario.role, l.niveis)) : [];
+  const linksVisiveis = funcionario
+    ? links.filter(
+        (l) => nivelPermitido(funcionario.role, l.niveis) && (!l.modulos || l.modulos.includes(modulo))
+      )
+    : [];
+
+  const nomeModulo = modulo === "armazem" ? "Armazém da Cidadania" : "Armazém Itinerante";
 
   return (
     <div className="app-shell">
@@ -67,24 +75,42 @@ export function Layout() {
           <img src={logoBranca} alt="Armazém da Cidadania" />
         </div>
 
-        <nav className="sidebar-nav">
-          {linksVisiveis.map((link) =>
-            link.disponivel ? (
-              <NavLink
-                key={link.to}
-                to={link.to}
-                className={({ isActive }) => (isActive ? "ativo" : "")}
-                onClick={() => setMenuAberto(false)}
-              >
-                <link.Icon /> {link.label}
-              </NavLink>
-            ) : (
-              <span key={link.to} style={{ opacity: 0.5, display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.65rem 0.75rem", fontSize: "0.92rem" }}>
-                <link.Icon /> {link.label}
-                <span className="em-breve">em breve</span>
-              </span>
-            )
+        {/* Em qual módulo (e ação) o usuário está, com atalho para trocar. */}
+        <div
+          style={{
+            margin: "0 0.75rem 0.75rem",
+            padding: "0.6rem 0.75rem",
+            borderRadius: 8,
+            background: "rgba(255,255,255,0.12)",
+            color: "#fff",
+            fontSize: "0.82rem",
+          }}
+        >
+          <div style={{ fontWeight: 700 }}>{nomeModulo}</div>
+          {modulo === "itinerante" && (
+            <div style={{ opacity: 0.85, marginTop: "0.15rem" }}>{acao?.nome ?? "Todas as ações"}</div>
           )}
+          <button
+            type="button"
+            className="btn btn-sair"
+            style={{ marginTop: "0.5rem", width: "100%" }}
+            onClick={() => navigate("/modulos?trocar=1")}
+          >
+            Trocar módulo
+          </button>
+        </div>
+
+        <nav className="sidebar-nav">
+          {linksVisiveis.map((link) => (
+            <NavLink
+              key={link.sufixo}
+              to={`${base}${link.sufixo}`}
+              className={({ isActive }) => (isActive ? "ativo" : "")}
+              onClick={() => setMenuAberto(false)}
+            >
+              <link.Icon /> {link.label}
+            </NavLink>
+          ))}
         </nav>
 
         <div className="sidebar-rodape">

@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../lib/api";
-import type { Atendimento, Nucleo } from "../../types";
-import { DescricaoResumida } from "./DescricaoResumida";
+import type { Atendimento, Nucleo, ServicoExterno } from "../../types";
+import { DetalhesAtendimento } from "./DetalhesAtendimento";
+import { FichaEncaminhamentosCampos } from "./FichaEncaminhamentosCampos";
+import {
+  fichaDoAtendimento,
+  fichaParaPayload,
+  resumoEncaminhamentos,
+  validarFicha,
+  type FichaForm,
+} from "./fichaAtendimento";
 import { PendenteFormCampos } from "./PendenteFormCampos";
 
 function formatarDataHora(iso: string): string {
@@ -11,6 +19,8 @@ function formatarDataHora(iso: string): string {
 interface EditarProps {
   atendimento: Atendimento;
   nucleo: Nucleo | undefined;
+  /** Todos os núcleos (candidatos a encaminhamento interno, exceto o do próprio atendimento). */
+  nucleos: Nucleo[];
   onFechar: () => void;
   onSalvo: () => void;
 }
@@ -19,16 +29,34 @@ interface EditarProps {
  * Edição posterior: só os campos preenchidos pelo núcleo são editáveis. Os que
  * vieram da recepção (cidadão, núcleo, unidade, prioridade, data) ficam bloqueados.
  */
-function EditarAtendimentoModal({ atendimento, nucleo, onFechar, onSalvo }: EditarProps) {
+function EditarAtendimentoModal({ atendimento, nucleo, nucleos, onFechar, onSalvo }: EditarProps) {
   const [demandaPrincipalId, setDemandaPrincipalId] = useState(atendimento.demanda_principal_id ?? "");
   const [outrasDemandas, setOutrasDemandas] = useState<string[]>(atendimento.outras_demandas ?? []);
-  const [resolvida, setResolvida] = useState(atendimento.resolvida);
-  const [houveEncaminhamento, setHouveEncaminhamento] = useState(atendimento.houve_encaminhamento);
+  const [ficha, setFicha] = useState<FichaForm>(() => fichaDoAtendimento(atendimento));
+  const [servicos, setServicos] = useState<ServicoExterno[]>([]);
   const [descricao, setDescricao] = useState(atendimento.descricao ?? "");
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
   const demandas = nucleo?.demandas.filter((d) => d.ativo || d.id === atendimento.demanda_principal_id) ?? [];
+  const nucleosDestino = nucleos.filter(
+    (n) => n.id !== atendimento.nucleo_id && (n.ativo || ficha.destinosIds.includes(n.id))
+  );
+  const registroAntigoComEncaminhamento =
+    atendimento.houve_encaminhamento &&
+    atendimento.houve_encaminhamento_externo == null &&
+    atendimento.houve_encaminhamento_interno == null;
+
+  // Serviços ativos do núcleo + os já escolhidos neste atendimento (mesmo inativados depois).
+  useEffect(() => {
+    api
+      .get<ServicoExterno[]>(`/servicos-externos?nucleo_id=${atendimento.nucleo_id}`)
+      .then((dados) => {
+        const jaEscolhidos = new Set((atendimento.servicos_externos ?? []).map((s) => s.id));
+        setServicos(dados.filter((s) => s.ativo || jaEscolhidos.has(s.id)));
+      })
+      .catch(() => setErro("Não foi possível carregar os serviços externos."));
+  }, [atendimento.nucleo_id, atendimento.servicos_externos]);
 
   function handleToggleOutraDemanda(id: string) {
     setOutrasDemandas((atual) => (atual.includes(id) ? atual.filter((d) => d !== id) : [...atual, id]));
@@ -39,14 +67,18 @@ function EditarAtendimentoModal({ atendimento, nucleo, onFechar, onSalvo }: Edit
       setErro("Selecione a demanda principal.");
       return;
     }
+    const erroFicha = validarFicha(ficha);
+    if (erroFicha) {
+      setErro(erroFicha);
+      return;
+    }
     setErro(null);
     setEnviando(true);
     try {
       await api.patch(`/atendimentos/${atendimento.id}`, {
         demanda_principal_id: demandaPrincipalId,
         outras_demandas: outrasDemandas.filter((id) => id !== demandaPrincipalId),
-        resolvida,
-        houve_encaminhamento: houveEncaminhamento,
+        ...fichaParaPayload(ficha),
         descricao: descricao.trim() || null,
       });
       onSalvo();
@@ -59,7 +91,7 @@ function EditarAtendimentoModal({ atendimento, nucleo, onFechar, onSalvo }: Edit
 
   return (
     <div className="modal-fundo" onClick={onFechar}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" style={{ maxHeight: "92vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
         <h2>Editar atendimento</h2>
 
         {erro && <div className="alerta-erro">{erro}</div>}
@@ -87,16 +119,25 @@ function EditarAtendimentoModal({ atendimento, nucleo, onFechar, onSalvo }: Edit
         </div>
 
         <h3 style={{ fontSize: "0.95rem", marginBottom: "0.5rem" }}>Preenchido pelo núcleo</h3>
+        {registroAntigoComEncaminhamento && (
+          <p style={{ fontSize: "0.85rem", color: "var(--cor-texto-suave)" }}>
+            Este registro antigo tem "Encaminhamento" sem detalhes. Se quiser, informe abaixo para onde foi.
+          </p>
+        )}
         <PendenteFormCampos
           demandas={demandas}
           demandaPrincipalId={demandaPrincipalId}
           onDemandaPrincipalChange={setDemandaPrincipalId}
           outrasDemandas={outrasDemandas}
           onToggleOutraDemanda={handleToggleOutraDemanda}
-          resolvida={resolvida}
-          onResolvidaChange={setResolvida}
-          houveEncaminhamento={houveEncaminhamento}
-          onHouveEncaminhamentoChange={setHouveEncaminhamento}
+          blocoResolucao={
+            <FichaEncaminhamentosCampos
+              ficha={ficha}
+              onChange={setFicha}
+              servicos={servicos}
+              nucleosDestino={nucleosDestino}
+            />
+          }
           descricao={descricao}
           onDescricaoChange={setDescricao}
         />
@@ -167,8 +208,8 @@ export function AtendimentosHistoricoPage() {
                   <th>Demanda principal</th>
                   <th>Outras demandas</th>
                   <th>Resolvida</th>
-                  <th>Encaminhado</th>
-                  <th>Descrição</th>
+                  <th>Encaminhamentos</th>
+                  <th>Detalhes</th>
                   <th></th>
                 </tr>
               </thead>
@@ -183,9 +224,9 @@ export function AtendimentosHistoricoPage() {
                     <td>{a.demanda_principal_nome ?? "—"}</td>
                     <td>{a.outras_demandas_nomes.length > 0 ? a.outras_demandas_nomes.join(", ") : "—"}</td>
                     <td>{a.resolvida ? "Sim" : "Não"}</td>
-                    <td>{a.houve_encaminhamento ? "Sim" : "Não"}</td>
+                    <td>{resumoEncaminhamentos(a)}</td>
                     <td>
-                      <DescricaoResumida texto={a.descricao} />
+                      <DetalhesAtendimento atendimento={a} />
                     </td>
                     <td>
                       <button className="btn btn-secundario btn-pequeno" onClick={() => setEditando(a)}>
@@ -204,6 +245,7 @@ export function AtendimentosHistoricoPage() {
         <EditarAtendimentoModal
           atendimento={editando}
           nucleo={nucleos.find((n) => n.id === editando.nucleo_id)}
+          nucleos={nucleos}
           onFechar={() => setEditando(null)}
           onSalvo={() => {
             setEditando(null);

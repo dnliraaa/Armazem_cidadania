@@ -25,7 +25,13 @@ export function FuncionarioFormModal({ funcionario, onFechar, onSalvo }: Props) 
   // Recepção e núcleo atuam dentro de uma unidade; o núcleo, além disso, tem o seu núcleo.
   // Conta de infraestrutura é de um aparelho (totem/painel), não de uma pessoa: CPF opcional.
   const cpfObrigatorio = role !== "infraestrutura";
-  const precisaUnidade =role === "recepcao" || role === "nucleo" || role === "infraestrutura";
+  // Módulos de acesso (o admin acessa os dois sempre, então a seção some para ele).
+  const [acessoArmazem, setAcessoArmazem] = useState(funcionario?.acesso_armazem ?? true);
+  const [acessoItinerante, setAcessoItinerante] = useState(funcionario?.acesso_itinerante ?? false);
+  const ehAdmin = role === "admin";
+  // A unidade só é exigida quando o Armazém está marcado (no Itinerante a ação substitui a unidade).
+  const nivelComUnidade = role === "recepcao" || role === "nucleo" || role === "infraestrutura";
+  const precisaUnidade = nivelComUnidade && acessoArmazem;
 
   useEffect(() => {
     api
@@ -42,6 +48,10 @@ export function FuncionarioFormModal({ funcionario, onFechar, onSalvo }: Props) 
     e.preventDefault();
     setErro(null);
 
+    if (!ehAdmin && !acessoArmazem && !acessoItinerante) {
+      setErro("Marque ao menos um módulo de acesso.");
+      return;
+    }
     if (precisaUnidade && !unidadeId) {
       setErro("Selecione a unidade para este nível.");
       return;
@@ -60,6 +70,8 @@ export function FuncionarioFormModal({ funcionario, onFechar, onSalvo }: Props) 
         role,
         unidade_id: precisaUnidade ? unidadeId : null,
         nucleo_id: role === "nucleo" ? nucleoId : null,
+        acesso_armazem: ehAdmin ? true : acessoArmazem,
+        acesso_itinerante: ehAdmin ? true : acessoItinerante,
       };
       if (editando && funcionario) {
         await api.put(`/funcionarios/${funcionario.id}`, dados);
@@ -133,6 +145,33 @@ export function FuncionarioFormModal({ funcionario, onFechar, onSalvo }: Props) 
               <option value="infraestrutura">Infraestrutura</option>
             </select>
           </div>
+
+          {!ehAdmin && (
+            <div className="campo">
+              <label>Módulos de acesso</label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 400 }}>
+                <input
+                  type="checkbox"
+                  checked={acessoArmazem}
+                  onChange={(e) => setAcessoArmazem(e.target.checked)}
+                />
+                Armazém da Cidadania
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 400 }}>
+                <input
+                  type="checkbox"
+                  checked={acessoItinerante}
+                  onChange={(e) => setAcessoItinerante(e.target.checked)}
+                />
+                Armazém Itinerante
+              </label>
+              {nivelComUnidade && !acessoArmazem && (
+                <span style={{ fontSize: "0.8rem", color: "var(--cor-texto-suave)" }}>
+                  No Itinerante a ação itinerante substitui a unidade.
+                </span>
+              )}
+            </div>
+          )}
 
           {role === "nucleo" && (
             <div className="campo">

@@ -51,6 +51,8 @@ export const UNIDADE_INEXISTENTE = "00000000-0000-0000-0000-000000000000";
  * Sem unidade cadastrada, falha fechada: não casa com nenhuma unidade.
  */
 export function unidadeDaInfraestrutura(req: Request): string | null {
+  // No Itinerante não há unidade: o recorte é a ação do contexto (ver utils/escopo.ts).
+  if (req.contexto?.modulo === "itinerante") return null;
   return req.funcionario?.role === "infraestrutura" ? req.funcionario.unidade_id ?? UNIDADE_INEXISTENTE : null;
 }
 

@@ -50,7 +50,8 @@ export function RecepcaoPage() {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [processando, setProcessando] = useState(false);
-  const [iniciandoAtendimento, setIniciandoAtendimento] = useState(false);
+  // "senha" = fluxo com a senha chamada; "direto" = Novo atendimento, sem senha.
+  const [iniciandoAtendimento, setIniciandoAtendimento] = useState<"senha" | "direto" | null>(null);
 
   async function carregarFila() {
     try {
@@ -153,6 +154,22 @@ export function RecepcaoPage() {
 
       {erro && <div className="alerta-erro">{erro}</div>}
 
+      {/* Ponto de partida principal: atendimento direto, sem depender de senha. */}
+      <div className="cartao" style={{ marginBottom: "1.5rem", textAlign: "center", padding: "1.75rem 1.5rem" }}>
+        <p style={{ margin: "0 0 1rem", color: "var(--cor-texto-suave)" }}>
+          Atenda o cidadão que está na recepção, com ou sem senha.
+        </p>
+        <button
+          className="btn btn-primario"
+          style={{ fontSize: "1.2rem", padding: "0.9rem 2.5rem" }}
+          onClick={() => setIniciandoAtendimento("direto")}
+        >
+          + Novo atendimento
+        </button>
+      </div>
+
+      <h2 style={{ fontSize: "1.1rem", margin: "0 0 0.75rem" }}>Fila de senhas</h2>
+
       <div className="cartao" style={{ marginBottom: "1.5rem", textAlign: "center", padding: "2rem 1.5rem" }}>
         {chamadaAtual ? (
           <>
@@ -181,7 +198,9 @@ export function RecepcaoPage() {
             )}
           </>
         ) : (
-          <p className="vazio" style={{ padding: "1.5rem 0" }}>Nenhuma senha chamada no momento.</p>
+          <p className="vazio" style={{ padding: "1.5rem 0" }}>
+            Nenhuma senha chamada no momento. A fila de senhas é opcional.
+          </p>
         )}
 
         <div className="campo" style={{ maxWidth: 240, margin: "0 auto 1.25rem" }}>
@@ -199,7 +218,7 @@ export function RecepcaoPage() {
             <button className="btn btn-secundario" onClick={handleChamarNovamente} disabled={processando}>
               Chamar novamente
             </button>
-            <button className="btn btn-primario" onClick={() => setIniciandoAtendimento(true)} disabled={processando}>
+            <button className="btn btn-primario" onClick={() => setIniciandoAtendimento("senha")} disabled={processando}>
               Iniciar atendimento
             </button>
             <button className="btn btn-perigo" onClick={() => handleResolver("perdida")} disabled={processando}>
@@ -311,12 +330,13 @@ export function RecepcaoPage() {
         </div>
       )}
 
-      {iniciandoAtendimento && chamadaAtual && (
+      {(iniciandoAtendimento === "direto" || (iniciandoAtendimento === "senha" && chamadaAtual)) && (
         <IniciarAtendimentoModal
-          senha={chamadaAtual}
-          onFechar={() => setIniciandoAtendimento(false)}
+          // Sem senha no "Novo atendimento"; com a senha chamada no fluxo da fila.
+          senha={iniciandoAtendimento === "senha" ? chamadaAtual : null}
+          onFechar={() => setIniciandoAtendimento(null)}
           onConcluido={async () => {
-            setIniciandoAtendimento(false);
+            setIniciandoAtendimento(null);
             await carregarFila();
           }}
         />

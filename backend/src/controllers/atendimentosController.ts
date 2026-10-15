@@ -1,7 +1,20 @@
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAdmin } from "../config/supabase.js";
+import { contextoDe } from "../middleware/contexto.js";
+import type { ContextoModulo } from "../types/index.js";
 import { cpfValido, somenteDigitos } from "../utils/cpf.js";
+import { aplicarEscopo, escopoInsert, pertenceAoContexto, podeEscrever } from "../utils/escopo.js";
+import {
+  apagarPendentes,
+  camposFicha,
+  criarPendentesDestino,
+  NOMES_CAMPOS_FICHA,
+  normalizarEstado,
+  validarEstado,
+  type EntradaFicha,
+  type EstadoFicha,
+} from "../utils/ficha.js";
 
 const statusSchema = z.enum(["pendente_revisao", "em_atendimento", "confirmado", "rejeitado"]);
 
@@ -27,21 +40,23 @@ const UNIDADE_INEXISTENTE = "00000000-0000-0000-0000-000000000000";
  * cadastrada, não vê nada (falha fechada).
  */
 function unidadeDoFuncionarioNucleo(req: Request): string | null {
+  // No Itinerante não há unidade: o recorte é a ação do contexto (`aplicarEscopo`).
+  if (contextoDe(req).modulo === "itinerante") return null;
   return req.funcionario?.role === "nucleo" ? req.funcionario.unidade_id ?? UNIDADE_INEXISTENTE : null;
 }
 
 /**
- * Para rotas `/pendentes/:id`: um funcionário "nucleo" só pode mexer em
- * pendentes do próprio núcleo. Com `respeitarChamador`, também bloqueia
- * pendentes que estão em atendimento por outro funcionário do núcleo.
+ * Para rotas `/pendentes/:id`: o pendente precisa pertencer ao módulo/ação do
+ * contexto (um id de outro módulo é tratado como inexistente — nada vaza entre
+ * Armazém e Itinerante). Um funcionário "nucleo" só pode mexer em pendentes do
+ * próprio núcleo (e, no Armazém, da própria unidade). Com `respeitarChamador`,
+ * também bloqueia pendentes que estão em atendimento por outro funcionário.
  */
 function exigirPendenteDoNucleo(respeitarChamador: boolean) {
   return async (req: Request, res: Response, next: NextFunction) => {
-    if (req.funcionario?.role !== "nucleo") return next();
-
     const { data: pendente, error } = await supabaseAdmin
       .from("atendimentos_pendentes")
-      .select("nucleo_id, unidade_id, status, chamado_por")
+      .select("modulo, acao_itinerante_id, nucleo_id, unidade_id, status, chamado_por")
       .eq("id", req.params.id)
       .maybeSingle();
 
@@ -49,10 +64,16 @@ function exigirPendenteDoNucleo(respeitarChamador: boolean) {
       console.error(error);
       return res.status(500).json({ erro: "Não foi possível consultar o atendimento pendente." });
     }
+    if (!pendente || !pertenceAoContexto(pendente, contextoDe(req))) {
+      return res.status(404).json({ erro: "Atendimento pendente não encontrado." });
+    }
+
+    if (req.funcionario?.role !== "nucleo") return next();
+
+    const unidadeEsperada = unidadeDoFuncionarioNucleo(req);
     if (
-      !pendente ||
       pendente.nucleo_id !== req.funcionario.nucleo_id ||
-      pendente.unidade_id !== unidadeDoFuncionarioNucleo(req)
+      (unidadeEsperada !== null && pendente.unidade_id !== unidadeEsperada)
     ) {
       return res.status(404).json({ erro: "Atendimento pendente não encontrado." });
     }
@@ -133,9 +154,11 @@ async function buscarMapasNomes(nucleoIds: string[], demandaIds: string[]) {
 /**
  * GET /api/atendimentos/pendentes?status=pendente_revisao[,em_atendimento]&nucleo_id=&encaminhados=1
  *
- * `encaminhados=1` restringe aos pendentes que vieram da recepção (têm
- * `senha_id`) — é a fila do núcleo. Funcionário de nível "nucleo" sempre vê
- * só o próprio núcleo e só encaminhamentos.
+ * `encaminhados=1` restringe aos pendentes encaminhados pela recepção ou por
+ * outro núcleo (`encaminhado = true`, com ou sem senha; os lançamentos manuais
+ * de papel não são) — é a fila do núcleo. Funcionário de nível "nucleo" sempre
+ * vê só o próprio núcleo e só encaminhamentos. Sempre restrito ao módulo (e,
+ * no Itinerante, à ação) do contexto.
  */
 export async function listarPendentes(req: Request, res: Response) {
   const statusPedidos = (typeof req.query.status === "string" ? req.query.status : "pendente_revisao")
@@ -147,15 +170,13 @@ export async function listarPendentes(req: Request, res: Response) {
   const nucleoDoUsuario = nucleoDoFuncionario(req);
   const nucleoFiltro = nucleoDoUsuario ?? (z.string().uuid().safeParse(req.query.nucleo_id).data ?? null);
 
-  let consulta = supabaseAdmin
-    .from("atendimentos_pendentes")
-    .select("*")
+  let consulta = aplicarEscopo(supabaseAdmin.from("atendimentos_pendentes").select("*"), contextoDe(req))
     .in("status", statusFiltro)
     .order("created_at", { ascending: true });
   if (nucleoFiltro) consulta = consulta.eq("nucleo_id", nucleoFiltro);
   const unidadeDoUsuario = unidadeDoFuncionarioNucleo(req);
   if (unidadeDoUsuario) consulta = consulta.eq("unidade_id", unidadeDoUsuario);
-  if (nucleoDoUsuario || req.query.encaminhados === "1") consulta = consulta.not("senha_id", "is", null);
+  if (nucleoDoUsuario || req.query.encaminhados === "1") consulta = consulta.eq("encaminhado", true);
 
   const { data: pendentes, error } = await consulta;
 
@@ -210,6 +231,10 @@ export async function criarPendenteManual(req: Request, res: Response) {
     return res.status(400).json({ erro: parse.error.issues[0]?.message ?? "Dados inválidos." });
   }
 
+  const ctx = contextoDe(req);
+  if (!podeEscrever(ctx)) {
+    return res.status(400).json({ erro: "Selecione uma ação itinerante.", codigo: "ACAO_OBRIGATORIA" });
+  }
   const { nucleo_id, demanda_principal_id, outras_demandas, resolvida, houve_encaminhamento } = parse.data;
   const cpfTexto = parse.data.cpf_texto?.trim() || null;
 
@@ -245,6 +270,7 @@ export async function criarPendenteManual(req: Request, res: Response) {
       data_atendimento: parse.data.data_atendimento?.trim() || hoje(),
       status: "pendente_revisao",
       criado_por: req.funcionario?.id ?? null,
+      ...escopoInsert(ctx),
     })
     .select("*")
     .single();
@@ -309,9 +335,10 @@ export async function atualizarPendente(req: Request, res: Response) {
     }
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("atendimentos_pendentes")
-    .update(atualizacoes)
+  const { data, error } = await aplicarEscopo(
+    supabaseAdmin.from("atendimentos_pendentes").update(atualizacoes),
+    contextoDe(req)
+  )
     .eq("id", id)
     .select("*")
     .single();
@@ -332,11 +359,15 @@ type ResultadoConfirmacao =
 async function confirmarPendentePorId(
   id: string,
   funcionarioId: string | null,
-  descricao: string | null = null
+  descricao: string | null = null,
+  ficha: EntradaFicha | null = null,
+  ctx: ContextoModulo = { modulo: "armazem", acaoId: null }
 ): Promise<ResultadoConfirmacao> {
-  const { data: pendente, error: erroPendente } = await supabaseAdmin
-    .from("atendimentos_pendentes")
-    .select("*")
+  // Escopado pelo contexto: o id de um pendente de outro módulo/ação é tratado como inexistente.
+  const { data: pendente, error: erroPendente } = await aplicarEscopo(
+    supabaseAdmin.from("atendimentos_pendentes").select("*"),
+    ctx
+  )
     .eq("id", id)
     .maybeSingle();
 
@@ -358,6 +389,52 @@ async function confirmarPendentePorId(
     };
   }
 
+  // Nova ficha do núcleo (resolvida + motivo, encaminhamentos externos e internos).
+  // Sem ela (confirmação do fluxo de papel, em lote), vale o comportamento antigo.
+  let estado: EstadoFicha | null = null;
+  if (ficha) {
+    estado = normalizarEstado({
+      resolvida: ficha.resolvida ?? false,
+      motivo: ficha.motivo_nao_resolvida,
+      externo: ficha.houve_encaminhamento_externo ?? false,
+      servicosIds: ficha.servicos_externos_ids,
+      outros: ficha.encaminhamento_externo_outros,
+      interno: ficha.houve_encaminhamento_interno ?? false,
+      destinosIds: ficha.nucleos_destino_ids,
+    });
+    const erroFicha = await validarEstado(estado, pendente.nucleo_id);
+    if (erroFicha) {
+      return { ok: false, status: 400, mensagem: erroFicha, erros: [] };
+    }
+    // No Armazém o encaminhamento interno precisa de unidade; no Itinerante a ação faz esse papel.
+    if (estado.interno && pendente.modulo === "armazem" && !pendente.unidade_id) {
+      return {
+        ok: false,
+        status: 400,
+        mensagem: "Este atendimento não tem unidade; não é possível encaminhar para outro núcleo.",
+        erros: [],
+      };
+    }
+  }
+
+  // Primeiro cria as solicitações dos núcleos de destino: se falhar, nada foi concluído ainda.
+  let pendentesGerados = new Map<string, string>();
+  if (estado?.interno) {
+    const criados = await criarPendentesDestino({
+      cidadaoId: pendente.cidadao_id,
+      unidadeId: pendente.unidade_id ?? null,
+      // A solicitação gerada fica no MESMO módulo (e na mesma ação) do atendimento de origem.
+      escopo: { modulo: pendente.modulo, acao_itinerante_id: pendente.acao_itinerante_id ?? null },
+      prioridade: Boolean(pendente.prioridade),
+      destinosIds: estado.destinosIds,
+      funcionarioId,
+    });
+    if (!criados.ok) {
+      return { ok: false, status: 500, mensagem: criados.erro, erros: [] };
+    }
+    pendentesGerados = criados.ids;
+  }
+
   const { data: atendimento, error: erroAtendimento } = await supabaseAdmin
     .from("atendimentos")
     .insert({
@@ -365,12 +442,23 @@ async function confirmarPendentePorId(
       nucleo_id: pendente.nucleo_id,
       demanda_principal_id: pendente.demanda_principal_id,
       outras_demandas: pendente.outras_demandas ?? [],
-      resolvida: pendente.resolvida ?? false,
-      houve_encaminhamento: pendente.houve_encaminhamento ?? false,
+      resolvida: estado ? estado.resolvida : pendente.resolvida ?? false,
+      // Coluna antiga: só vale para registros antigos; a nova ficha usa os campos externo/interno.
+      houve_encaminhamento: estado ? false : pendente.houve_encaminhamento ?? false,
+      ...(estado
+        ? {
+            motivo_nao_resolvida: estado.motivo,
+            houve_encaminhamento_externo: estado.externo,
+            encaminhamento_externo_outros: estado.outros,
+            houve_encaminhamento_interno: estado.interno,
+          }
+        : {}),
       origem: pendente.origem,
       atendido_por: funcionarioId,
       pendente_id: pendente.id,
       unidade_id: pendente.unidade_id ?? null,
+      modulo: pendente.modulo,
+      acao_itinerante_id: pendente.acao_itinerante_id ?? null,
       descricao,
       data_atendimento: pendente.data_atendimento,
     })
@@ -379,7 +467,42 @@ async function confirmarPendentePorId(
 
   if (erroAtendimento) {
     console.error(erroAtendimento);
+    await apagarPendentes([...pendentesGerados.values()]);
     return { ok: false, status: 500, mensagem: "Não foi possível confirmar o atendimento.", erros: [] };
+  }
+
+  // Desfaz a conclusão (atendimento + solicitações geradas) se uma etapa seguinte falhar.
+  async function desfazerConclusao() {
+    const { error } = await supabaseAdmin.from("atendimentos").delete().eq("id", atendimento.id);
+    if (error) console.error(error);
+    await apagarPendentes([...pendentesGerados.values()]);
+  }
+
+  if (estado) {
+    if (estado.servicosIds.length > 0) {
+      const { error } = await supabaseAdmin
+        .from("atendimento_servicos_externos")
+        .insert(estado.servicosIds.map((servicoId) => ({ atendimento_id: atendimento.id, servico_id: servicoId })));
+      if (error) {
+        console.error(error);
+        await desfazerConclusao();
+        return { ok: false, status: 500, mensagem: "Não foi possível gravar os serviços externos.", erros: [] };
+      }
+    }
+    if (estado.destinosIds.length > 0) {
+      const { error } = await supabaseAdmin.from("atendimento_encaminhamentos_internos").insert(
+        estado.destinosIds.map((nucleoDestinoId) => ({
+          atendimento_id: atendimento.id,
+          nucleo_destino_id: nucleoDestinoId,
+          pendente_gerado_id: pendentesGerados.get(nucleoDestinoId) ?? null,
+        }))
+      );
+      if (error) {
+        console.error(error);
+        await desfazerConclusao();
+        return { ok: false, status: 500, mensagem: "Não foi possível gravar os encaminhamentos internos.", erros: [] };
+      }
+    }
   }
 
   const { error: erroUpdate } = await supabaseAdmin
@@ -389,6 +512,11 @@ async function confirmarPendentePorId(
 
   if (erroUpdate) {
     console.error(erroUpdate);
+    // Com a nova ficha a conclusão é desfeita por inteiro; no fluxo antigo mantém o comportamento anterior.
+    if (estado) {
+      await desfazerConclusao();
+      return { ok: false, status: 500, mensagem: "Não foi possível concluir o atendimento.", erros: [] };
+    }
     return {
       ok: false,
       status: 500,
@@ -403,16 +531,30 @@ async function confirmarPendentePorId(
 /** Descrição livre e opcional de como foi o atendimento. */
 const descricaoSchema = z.string().trim().max(5000, "A descrição é longa demais (máximo de 5000 caracteres).");
 
-const confirmarSchema = z.object({ descricao: descricaoSchema.optional().nullable() });
+const confirmarSchema = z.object({ descricao: descricaoSchema.optional().nullable(), ...camposFicha });
 
-/** POST /api/atendimentos/pendentes/:id/confirmar  { descricao? } */
+/**
+ * POST /api/atendimentos/pendentes/:id/confirmar  { descricao?, resolvida?, motivo_nao_resolvida?,
+ *   houve_encaminhamento_externo?, servicos_externos_ids?, encaminhamento_externo_outros?,
+ *   houve_encaminhamento_interno?, nucleos_destino_ids? }
+ *
+ * Com `resolvida` informada, aplica a nova ficha do núcleo (validações e
+ * encaminhamentos); sem ela, confirma como no fluxo antigo.
+ */
 export async function confirmarPendente(req: Request, res: Response) {
   const { id } = req.params;
   const parse = confirmarSchema.safeParse(req.body ?? {});
   if (!parse.success) {
     return res.status(400).json({ erro: parse.error.issues[0]?.message ?? "Dados inválidos." });
   }
-  const resultado = await confirmarPendentePorId(id, req.funcionario?.id ?? null, parse.data.descricao || null);
+  const { descricao, ...ficha } = parse.data;
+  const resultado = await confirmarPendentePorId(
+    id,
+    req.funcionario?.id ?? null,
+    descricao || null,
+    ficha.resolvida === undefined ? null : ficha,
+    contextoDe(req)
+  );
 
   if (!resultado.ok) {
     return res.status(resultado.status).json({ erro: resultado.mensagem, erros: resultado.erros });
@@ -439,7 +581,7 @@ export async function confirmarLote(req: Request, res: Response) {
   const bloqueados: { id: string; erros: string[]; mensagem: string }[] = [];
 
   for (const id of parse.data.ids) {
-    const resultado = await confirmarPendentePorId(id, req.funcionario?.id ?? null);
+    const resultado = await confirmarPendentePorId(id, req.funcionario?.id ?? null, null, null, contextoDe(req));
     if (resultado.ok) {
       confirmados.push(id);
     } else {
@@ -454,13 +596,14 @@ export async function confirmarLote(req: Request, res: Response) {
 export async function rejeitarPendente(req: Request, res: Response) {
   const { id } = req.params;
 
-  const { data, error } = await supabaseAdmin
-    .from("atendimentos_pendentes")
-    .update({
+  const { data, error } = await aplicarEscopo(
+    supabaseAdmin.from("atendimentos_pendentes").update({
       status: "rejeitado",
       revisado_por: req.funcionario?.id ?? null,
       revisado_em: new Date().toISOString(),
-    })
+    }),
+    contextoDe(req)
+  )
     .eq("id", id)
     .select("*")
     .single();
@@ -473,25 +616,101 @@ export async function rejeitarPendente(req: Request, res: Response) {
   res.json(data);
 }
 
+/**
+ * De onde vem um atendimento iniciado na recepção: de uma senha 'chamada' ou
+ * direto (sem senha). Em ambos os casos devolve a unidade onde ele acontece.
+ *   - Com senha: valida que está 'chamada', na unidade da recepção, e herda a unidade dela.
+ *   - Sem senha: a unidade vem do cadastro do funcionário logado.
+ */
+async function resolverOrigemRecepcao(
+  req: Request,
+  senhaId: string | null | undefined
+): Promise<{ ok: true; senhaId: string | null; unidadeId: string | null } | { ok: false; status: number; erro: string }> {
+  const ctx = contextoDe(req);
+  const itinerante = ctx.modulo === "itinerante";
+
+  if (!senhaId) {
+    // No Itinerante não há unidade (a ação do contexto faz esse papel).
+    if (itinerante) return { ok: true, senhaId: null, unidadeId: null };
+
+    const unidadeId = req.funcionario?.unidade_id ?? null;
+    if (!unidadeId) {
+      return {
+        ok: false,
+        status: 400,
+        erro: "Seu cadastro não tem unidade vinculada. Peça a um administrador para informar a unidade.",
+      };
+    }
+    return { ok: true, senhaId: null, unidadeId };
+  }
+
+  // A senha precisa ser do módulo/ação do contexto (um id de outro módulo é tratado como inexistente).
+  const { data: senha, error } = await aplicarEscopo(supabaseAdmin.from("senhas").select("id, status, unidade_id"), ctx)
+    .eq("id", senhaId)
+    .maybeSingle();
+
+  if (error) {
+    console.error(error);
+    return { ok: false, status: 500, erro: "Não foi possível consultar a senha." };
+  }
+  // Recepção só atua na fila da própria unidade (mesma regra de /api/fila) — no Armazém.
+  if (
+    !senha ||
+    (!itinerante && req.funcionario?.role === "recepcao" && senha.unidade_id !== req.funcionario.unidade_id)
+  ) {
+    return { ok: false, status: 404, erro: "Senha não encontrada." };
+  }
+  if (senha.status !== "chamada") {
+    return { ok: false, status: 409, erro: "A senha precisa estar com status 'chamada' para iniciar o atendimento." };
+  }
+  return { ok: true, senhaId: senha.id, unidadeId: senha.unidade_id };
+}
+
+/** Marca a senha como atendida só se ainda estiver 'chamada' (protege contra duplo clique). */
+async function marcarSenhaAtendida(
+  senhaId: string,
+  ctx: ContextoModulo
+): Promise<{ ok: true } | { ok: false; status: number; erro: string }> {
+  const { data, error } = await aplicarEscopo(
+    supabaseAdmin.from("senhas").update({ status: "atendida", atendida_em: new Date().toISOString() }),
+    ctx
+  )
+    .eq("id", senhaId)
+    .eq("status", "chamada")
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error(error);
+    return { ok: false, status: 500, erro: "Não foi possível marcar a senha como atendida." };
+  }
+  if (!data) {
+    return { ok: false, status: 409, erro: "A senha já foi atualizada por outra ação. Recarregue a fila." };
+  }
+  return { ok: true };
+}
+
 const encaminharSchema = z.object({
-  senha_id: z.string().uuid("Senha inválida."),
+  // Opcional: a recepção também inicia atendimentos sem senha (totem/painel fora de uso).
+  senha_id: z.string().uuid("Senha inválida.").optional().nullable(),
   cidadao_id: z.string().uuid("Cidadão inválido."),
   nucleo_id: z.string().uuid("Selecione o núcleo de destino."),
   prioridade: z.boolean().optional().default(false),
 });
 
 /**
- * POST /api/atendimentos/encaminhar  { senha_id, cidadao_id, nucleo_id, prioridade }
+ * POST /api/atendimentos/encaminhar  { senha_id?, cidadao_id, nucleo_id, prioridade }
  *
- * A recepção identificou o cidadão da senha chamada e o encaminha a um
- * núcleo: cria um registro leve em `atendimentos_pendentes` (fila do núcleo)
- * e marca a senha como atendida. Demanda, resolvida etc. só são preenchidos
- * depois, pelo núcleo, ao confirmar o pendente (que aí vira `atendimentos`).
+ * A recepção identificou o cidadão e o encaminha a um núcleo: cria um
+ * registro leve em `atendimentos_pendentes` (fila do núcleo). Demanda,
+ * resolvida etc. só são preenchidos depois, pelo núcleo, ao confirmar o
+ * pendente (que aí vira `atendimentos`).
  *
+ * Com `senha_id`, a senha chamada é marcada como atendida e o pendente herda a
+ * unidade dela; sem, nenhuma senha é tocada e a unidade vem do funcionário.
  * O Supabase JS não expõe transação, então a ordem é: cria o pendente,
- * depois marca a senha (só se ainda estiver 'chamada'); se essa 2ª etapa
- * falhar, o pendente recém-criado é removido, evitando um encaminhamento
- * duplicado ou uma senha atendida sem encaminhamento.
+ * depois marca a senha; se essa 2ª etapa falhar, o pendente recém-criado é
+ * removido, evitando um encaminhamento duplicado ou uma senha atendida sem encaminhamento.
  */
 export async function encaminharAtendimento(req: Request, res: Response) {
   const parse = encaminharSchema.safeParse(req.body);
@@ -500,25 +719,13 @@ export async function encaminharAtendimento(req: Request, res: Response) {
   }
   const { senha_id, cidadao_id, nucleo_id, prioridade } = parse.data;
 
-  const { data: senha, error: erroSenha } = await supabaseAdmin
-    .from("senhas")
-    .select("id, status, unidade_id")
-    .eq("id", senha_id)
-    .maybeSingle();
-
-  if (erroSenha) {
-    console.error(erroSenha);
-    return res.status(500).json({ erro: "Não foi possível consultar a senha." });
+  const ctx = contextoDe(req);
+  if (!podeEscrever(ctx)) {
+    return res.status(400).json({ erro: "Selecione uma ação itinerante.", codigo: "ACAO_OBRIGATORIA" });
   }
-  if (!senha) {
-    return res.status(404).json({ erro: "Senha não encontrada." });
-  }
-  // Recepção só atua na fila da própria unidade (mesma regra de /api/fila).
-  if (req.funcionario?.role === "recepcao" && senha.unidade_id !== req.funcionario.unidade_id) {
-    return res.status(404).json({ erro: "Senha não encontrada." });
-  }
-  if (senha.status !== "chamada") {
-    return res.status(409).json({ erro: "A senha precisa estar com status 'chamada' para iniciar o atendimento." });
+  const origem = await resolverOrigemRecepcao(req, senha_id);
+  if (!origem.ok) {
+    return res.status(origem.status).json({ erro: origem.erro });
   }
 
   const { data: nucleo } = await supabaseAdmin
@@ -556,14 +763,17 @@ export async function encaminharAtendimento(req: Request, res: Response) {
       validacoes: cidadao.cpf ? { cpfValido: cpfValido(cidadao.cpf) } : null,
       nucleo_id,
       prioridade,
-      senha_id: senha.id,
-      unidade_id: senha.unidade_id,
+      senha_id: origem.senhaId,
+      unidade_id: origem.unidadeId,
       outras_demandas: [],
       resolvida: false,
       houve_encaminhamento: false,
       data_atendimento: hoje(),
       status: "pendente_revisao",
       criado_por: req.funcionario?.id ?? null,
+      // Encaminhamento da recepção: é o que a fila do núcleo lista.
+      encaminhado: true,
+      ...escopoInsert(ctx),
     })
     .select("*")
     .single();
@@ -573,24 +783,13 @@ export async function encaminharAtendimento(req: Request, res: Response) {
     return res.status(500).json({ erro: "Não foi possível criar o encaminhamento." });
   }
 
-  // Só marca como atendida se ainda estiver 'chamada' — protege contra duplo clique.
-  const { data: senhaAtualizada, error: erroUpdate } = await supabaseAdmin
-    .from("senhas")
-    .update({ status: "atendida", atendida_em: new Date().toISOString() })
-    .eq("id", senha.id)
-    .eq("status", "chamada")
-    .select("id")
-    .maybeSingle();
-
-  if (erroUpdate || !senhaAtualizada) {
-    if (erroUpdate) console.error(erroUpdate);
-    const { error: erroDesfazer } = await supabaseAdmin.from("atendimentos_pendentes").delete().eq("id", pendente.id);
-    if (erroDesfazer) console.error(erroDesfazer);
-    return res.status(erroUpdate ? 500 : 409).json({
-      erro: erroUpdate
-        ? "Não foi possível marcar a senha como atendida."
-        : "A senha já foi atualizada por outra ação. Recarregue a fila.",
-    });
+  if (origem.senhaId) {
+    const marcada = await marcarSenhaAtendida(origem.senhaId, ctx);
+    if (!marcada.ok) {
+      const { error: erroDesfazer } = await supabaseAdmin.from("atendimentos_pendentes").delete().eq("id", pendente.id);
+      if (erroDesfazer) console.error(erroDesfazer);
+      return res.status(marcada.status).json({ erro: marcada.erro });
+    }
   }
 
   res.status(201).json({ ...pendente, erros: calcularErros(pendente) });
@@ -606,7 +805,7 @@ export async function encaminharAtendimento(req: Request, res: Response) {
  *   2. Os dois esperando e o prioritário chegou antes do normal → prioritário.
  *   3. Senão, se já foi chamado ao menos 1 não-prioritário hoje desde o
  *      último prioritário chamado → prioritário; senão o normal.
- * Considera só encaminhamentos da recepção (com `senha_id`) ainda 'pendente_revisao'.
+ * Considera só encaminhamentos da recepção (com `unidade_id`) ainda 'pendente_revisao'.
  */
 export async function proximaSugestaoPendente(req: Request, res: Response) {
   const nucleoId = nucleoDoFuncionario(req) ?? (z.string().uuid().safeParse(req.query.nucleo_id).data ?? null);
@@ -618,14 +817,14 @@ export async function proximaSugestaoPendente(req: Request, res: Response) {
   // alternância abaixo usam o mesmo recorte.
   const unidadeId = unidadeDoFuncionarioNucleo(req);
 
+  const ctx = contextoDe(req);
+
   const maisAntigo = (prioridade: boolean) => {
-    let consulta = supabaseAdmin
-      .from("atendimentos_pendentes")
-      .select("*")
+    let consulta = aplicarEscopo(supabaseAdmin.from("atendimentos_pendentes").select("*"), ctx)
       .eq("nucleo_id", nucleoId)
       .eq("status", "pendente_revisao")
       .eq("prioridade", prioridade)
-      .not("senha_id", "is", null)
+      .eq("encaminhado", true)
       .order("created_at", { ascending: true })
       .limit(1);
     if (unidadeId) consulta = consulta.eq("unidade_id", unidadeId);
@@ -653,9 +852,7 @@ export async function proximaSugestaoPendente(req: Request, res: Response) {
 
   const inicioDoDia = `${hoje()}T00:00:00.000Z`;
 
-  let consultaUltimoPrioritario = supabaseAdmin
-    .from("atendimentos_pendentes")
-    .select("chamado_em")
+  let consultaUltimoPrioritario = aplicarEscopo(supabaseAdmin.from("atendimentos_pendentes").select("chamado_em"), ctx)
     .eq("nucleo_id", nucleoId)
     .eq("prioridade", true)
     .gte("chamado_em", inicioDoDia)
@@ -670,9 +867,10 @@ export async function proximaSugestaoPendente(req: Request, res: Response) {
 
   const desde = ultimoPrioritarioChamado?.[0]?.chamado_em ?? inicioDoDia;
 
-  let consultaNormaisChamadas = supabaseAdmin
-    .from("atendimentos_pendentes")
-    .select("id", { count: "exact", head: true })
+  let consultaNormaisChamadas = aplicarEscopo(
+    supabaseAdmin.from("atendimentos_pendentes").select("id", { count: "exact", head: true }),
+    ctx
+  )
     .eq("nucleo_id", nucleoId)
     .eq("prioridade", false)
     .gt("chamado_em", desde);
@@ -703,15 +901,16 @@ export async function chamarPendente(req: Request, res: Response) {
     return res.status(400).json({ erro: parse.error.issues[0]?.message ?? "Dados inválidos." });
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("atendimentos_pendentes")
-    .update({
+  const { data, error } = await aplicarEscopo(
+    supabaseAdmin.from("atendimentos_pendentes").update({
       status: "em_atendimento",
       chamado_por: req.funcionario?.id ?? null,
       chamado_em: new Date().toISOString(),
       // Sala/guichê exibido no Painel de Chamados.
       sala: parse.data.sala || null,
-    })
+    }),
+    contextoDe(req)
+  )
     .eq("id", req.params.id)
     .eq("status", "pendente_revisao")
     .select("*")
@@ -730,9 +929,10 @@ export async function chamarPendente(req: Request, res: Response) {
 
 /** POST /api/atendimentos/pendentes/:id/liberar — devolve um pendente 'em_atendimento' para a fila. */
 export async function liberarPendente(req: Request, res: Response) {
-  const { data, error } = await supabaseAdmin
-    .from("atendimentos_pendentes")
-    .update({ status: "pendente_revisao", chamado_por: null })
+  const { data, error } = await aplicarEscopo(
+    supabaseAdmin.from("atendimentos_pendentes").update({ status: "pendente_revisao", chamado_por: null }),
+    contextoDe(req)
+  )
     .eq("id", req.params.id)
     .eq("status", "em_atendimento")
     .select("*")
@@ -751,7 +951,9 @@ export async function liberarPendente(req: Request, res: Response) {
 
 /** GET /api/atendimentos?nucleo_id=&de=&ate= */
 export async function listarAtendimentos(req: Request, res: Response) {
-  let query = supabaseAdmin.from("atendimentos").select("*").order("created_at", { ascending: false });
+  let query = aplicarEscopo(supabaseAdmin.from("atendimentos").select("*"), contextoDe(req)).order("created_at", {
+    ascending: false,
+  });
 
   const nucleoDoUsuario = nucleoDoFuncionario(req);
   if (nucleoDoUsuario) {
@@ -806,6 +1008,38 @@ export async function listarAtendimentos(req: Request, res: Response) {
         }),
   ]);
 
+  // Encaminhamentos da nova ficha: serviços externos escolhidos e núcleos de destino.
+  const atendimentoIds = lista.map((a) => a.id);
+  const [{ data: servicosLigados }, { data: internosLigados }] = await Promise.all([
+    atendimentoIds.length
+      ? supabaseAdmin
+          .from("atendimento_servicos_externos")
+          .select("atendimento_id, servico_id")
+          .in("atendimento_id", atendimentoIds)
+      : Promise.resolve({ data: [] as { atendimento_id: string; servico_id: string }[] }),
+    atendimentoIds.length
+      ? supabaseAdmin
+          .from("atendimento_encaminhamentos_internos")
+          .select("atendimento_id, nucleo_destino_id, pendente_gerado_id")
+          .in("atendimento_id", atendimentoIds)
+      : Promise.resolve({
+          data: [] as { atendimento_id: string; nucleo_destino_id: string; pendente_gerado_id: string | null }[],
+        }),
+  ]);
+
+  const servicoIds = [...new Set((servicosLigados ?? []).map((s) => s.servico_id))];
+  const destinoIds = [...new Set((internosLigados ?? []).map((i) => i.nucleo_destino_id))];
+  const [{ data: servicos }, { data: nucleosDestino }] = await Promise.all([
+    servicoIds.length
+      ? supabaseAdmin.from("servicos_externos").select("id, nome").in("id", servicoIds)
+      : Promise.resolve({ data: [] as { id: string; nome: string }[] }),
+    destinoIds.length
+      ? supabaseAdmin.from("nucleos").select("id, nome").in("id", destinoIds)
+      : Promise.resolve({ data: [] as { id: string; nome: string }[] }),
+  ]);
+  const servicoNomeMap = new Map((servicos ?? []).map((s) => [s.id, s.nome]));
+  const nucleoDestinoMap = new Map((nucleosDestino ?? []).map((n) => [n.id, n.nome]));
+
   const cidadaoMap = new Map((cidadaos ?? []).map((c) => [c.id, c.nome]));
   const unidadeMap = new Map((unidades ?? []).map((u) => [u.id, u.nome]));
   const pendenteMap = new Map((pendentes ?? []).map((p) => [p.id, p]));
@@ -813,6 +1047,16 @@ export async function listarAtendimentos(req: Request, res: Response) {
   const resultado = lista.map((a) => {
     const origem = a.pendente_id ? pendenteMap.get(a.pendente_id) : undefined;
     return {
+      servicos_externos: (servicosLigados ?? [])
+        .filter((s) => s.atendimento_id === a.id)
+        .map((s) => ({ id: s.servico_id, nome: servicoNomeMap.get(s.servico_id) ?? "—" })),
+      encaminhamentos_internos: (internosLigados ?? [])
+        .filter((i) => i.atendimento_id === a.id)
+        .map((i) => ({
+          nucleo_id: i.nucleo_destino_id,
+          nucleo_nome: nucleoDestinoMap.get(i.nucleo_destino_id) ?? "—",
+          pendente_gerado_id: i.pendente_gerado_id,
+        })),
       ...a,
       cidadao_nome: a.cidadao_id ? cidadaoMap.get(a.cidadao_id) ?? null : null,
       nucleo_nome: a.nucleo_id ? nucleoMap.get(a.nucleo_id) ?? null : null,
@@ -831,7 +1075,7 @@ export async function listarAtendimentos(req: Request, res: Response) {
 }
 
 const resolverNaRecepcaoSchema = z.object({
-  senha_id: z.string().uuid("Senha inválida."),
+  senha_id: z.string().uuid("Senha inválida.").optional().nullable(),
   cidadao_id: z.string().uuid("Cidadão inválido."),
   descricao: z.string().trim().min(1, "Descreva a informação da demanda resolvida.").max(1000, "A informação é longa demais (máximo de 1000 caracteres)."),
 });
@@ -850,22 +1094,14 @@ export async function resolverNaRecepcao(req: Request, res: Response) {
   }
   const { senha_id, cidadao_id, descricao } = parse.data;
 
-  const { data: senha, error: erroSenha } = await supabaseAdmin
-    .from("senhas")
-    .select("id, status, unidade_id")
-    .eq("id", senha_id)
-    .maybeSingle();
-
-  if (erroSenha) {
-    console.error(erroSenha);
-    return res.status(500).json({ erro: "Não foi possível consultar a senha." });
+  const ctx = contextoDe(req);
+  if (!podeEscrever(ctx)) {
+    return res.status(400).json({ erro: "Selecione uma ação itinerante.", codigo: "ACAO_OBRIGATORIA" });
   }
-  // Recepção só atua na fila da própria unidade (mesma regra de /api/fila).
-  if (!senha || (req.funcionario?.role === "recepcao" && senha.unidade_id !== req.funcionario.unidade_id)) {
-    return res.status(404).json({ erro: "Senha não encontrada." });
-  }
-  if (senha.status !== "chamada") {
-    return res.status(409).json({ erro: "A senha precisa estar com status 'chamada' para registrar o atendimento." });
+  // Com senha: valida a senha chamada; sem: a unidade vem do funcionário.
+  const origem = await resolverOrigemRecepcao(req, senha_id);
+  if (!origem.ok) {
+    return res.status(origem.status).json({ erro: origem.erro });
   }
 
   const { data: cidadao } = await supabaseAdmin.from("cidadaos").select("id").eq("id", cidadao_id).maybeSingle();
@@ -877,10 +1113,11 @@ export async function resolverNaRecepcao(req: Request, res: Response) {
     .from("atendimentos_recepcao")
     .insert({
       cidadao_id,
-      senha_id: senha.id,
-      unidade_id: senha.unidade_id,
+      senha_id: origem.senhaId,
+      unidade_id: origem.unidadeId,
       descricao,
       criado_por: req.funcionario?.id ?? null,
+      ...escopoInsert(ctx),
     })
     .select("*")
     .single();
@@ -890,24 +1127,13 @@ export async function resolverNaRecepcao(req: Request, res: Response) {
     return res.status(500).json({ erro: "Não foi possível registrar o atendimento." });
   }
 
-  // Só marca como atendida se ainda estiver 'chamada' — protege contra duplo clique.
-  const { data: senhaAtualizada, error: erroUpdate } = await supabaseAdmin
-    .from("senhas")
-    .update({ status: "atendida", atendida_em: new Date().toISOString() })
-    .eq("id", senha.id)
-    .eq("status", "chamada")
-    .select("id")
-    .maybeSingle();
-
-  if (erroUpdate || !senhaAtualizada) {
-    if (erroUpdate) console.error(erroUpdate);
-    const { error: erroDesfazer } = await supabaseAdmin.from("atendimentos_recepcao").delete().eq("id", registro.id);
-    if (erroDesfazer) console.error(erroDesfazer);
-    return res.status(erroUpdate ? 500 : 409).json({
-      erro: erroUpdate
-        ? "Não foi possível marcar a senha como atendida."
-        : "A senha já foi atualizada por outra ação. Recarregue a fila.",
-    });
+  if (origem.senhaId) {
+    const marcada = await marcarSenhaAtendida(origem.senhaId, ctx);
+    if (!marcada.ok) {
+      const { error: erroDesfazer } = await supabaseAdmin.from("atendimentos_recepcao").delete().eq("id", registro.id);
+      if (erroDesfazer) console.error(erroDesfazer);
+      return res.status(marcada.status).json({ erro: marcada.erro });
+    }
   }
 
   res.status(201).json(registro);
@@ -915,11 +1141,12 @@ export async function resolverNaRecepcao(req: Request, res: Response) {
 
 /** GET /api/atendimentos/resolvidos-recepcao — a recepção vê só a própria unidade; acesso amplo vê tudo. */
 export async function listarResolvidosRecepcao(req: Request, res: Response) {
-  let query = supabaseAdmin
-    .from("atendimentos_recepcao")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (req.funcionario?.role === "recepcao") {
+  const ctx = contextoDe(req);
+  let query = aplicarEscopo(supabaseAdmin.from("atendimentos_recepcao").select("*"), ctx).order("created_at", {
+    ascending: false,
+  });
+  // Recepção do Armazém só vê a própria unidade; no Itinerante o recorte é a ação (`aplicarEscopo`).
+  if (ctx.modulo === "armazem" && req.funcionario?.role === "recepcao") {
     query = query.eq("unidade_id", req.funcionario.unidade_id ?? UNIDADE_INEXISTENTE);
   }
 
@@ -956,12 +1183,15 @@ const atualizarAtendimentoSchema = z
   .object({
     demanda_principal_id: z.string().uuid().nullable().optional(),
     outras_demandas: z.array(z.string().uuid()).optional(),
-    resolvida: z.boolean().optional(),
+    // `houve_encaminhamento` (coluna antiga) segue aceito só por compatibilidade; a ficha nova usa externo/interno.
     houve_encaminhamento: z.boolean().optional(),
     descricao: descricaoSchema.nullable().optional(),
+    ...camposFicha,
   })
   // strict: qualquer outro campo (cidadao_id, nucleo_id, unidade_id...) é rejeitado, não ignorado em silêncio.
-  .strict("Só é possível editar demanda principal, outras demandas, resolvida, houve encaminhamento e descrição.");
+  .strict(
+    "Só é possível editar demandas, resolvida e motivo, encaminhamentos externos e internos, e descrição."
+  );
 
 /** PATCH /api/atendimentos/:id — edição posterior, só dos campos preenchidos pelo núcleo. */
 export async function atualizarAtendimento(req: Request, res: Response) {
@@ -970,9 +1200,15 @@ export async function atualizarAtendimento(req: Request, res: Response) {
     return res.status(400).json({ erro: parse.error.issues[0]?.message ?? "Dados inválidos." });
   }
 
-  const { data: atendimento, error: erroBusca } = await supabaseAdmin
-    .from("atendimentos")
-    .select("id, nucleo_id, unidade_id, demanda_principal_id, outras_demandas")
+  // O atendimento precisa ser do módulo/ação do contexto (um id de outro módulo é tratado como inexistente).
+  const { data: atendimento, error: erroBusca } = await aplicarEscopo(
+    supabaseAdmin
+      .from("atendimentos")
+      .select(
+        "id, modulo, acao_itinerante_id, nucleo_id, unidade_id, cidadao_id, pendente_id, demanda_principal_id, outras_demandas, resolvida, motivo_nao_resolvida, houve_encaminhamento_externo, encaminhamento_externo_outros, houve_encaminhamento_interno"
+      ),
+    contextoDe(req)
+  )
     .eq("id", req.params.id)
     .maybeSingle();
 
@@ -991,19 +1227,28 @@ export async function atualizarAtendimento(req: Request, res: Response) {
     return res.status(403).json({ erro: "Você não tem permissão para editar este atendimento." });
   }
 
-  const atualizacoes = { ...parse.data };
+  // Separa a ficha de encaminhamentos (tratada à parte) do restante dos campos editáveis.
+  const { resolvida, motivo_nao_resolvida, houve_encaminhamento_externo, servicos_externos_ids,
+    encaminhamento_externo_outros, houve_encaminhamento_interno, nucleos_destino_ids, ...simples } = parse.data;
+  const fichaEnviada: EntradaFicha = {
+    resolvida, motivo_nao_resolvida, houve_encaminhamento_externo, servicos_externos_ids,
+    encaminhamento_externo_outros, houve_encaminhamento_interno, nucleos_destino_ids,
+  };
+  const temFicha = NOMES_CAMPOS_FICHA.some((campo) => fichaEnviada[campo] !== undefined);
+
+  const atualizacoes: Record<string, unknown> = { ...simples };
   // Descrição vazia = sem descrição (guarda null, não string vazia).
   if (typeof atualizacoes.descricao === "string" && !atualizacoes.descricao) {
     atualizacoes.descricao = null;
   }
-  if (Object.keys(atualizacoes).length === 0) {
+  if (Object.keys(atualizacoes).length === 0 && !temFicha) {
     return res.status(400).json({ erro: "Nenhum campo para atualizar." });
   }
 
   // As demandas escolhidas precisam pertencer ao núcleo do atendimento.
   const demandasEnviadas = [
-    ...(atualizacoes.demanda_principal_id ? [atualizacoes.demanda_principal_id] : []),
-    ...(atualizacoes.outras_demandas ?? []),
+    ...(atualizacoes.demanda_principal_id ? [atualizacoes.demanda_principal_id as string] : []),
+    ...((atualizacoes.outras_demandas as string[] | undefined) ?? []),
   ];
   if (demandasEnviadas.length > 0) {
     const idsUnicos = [...new Set(demandasEnviadas)];
@@ -1021,6 +1266,106 @@ export async function atualizarAtendimento(req: Request, res: Response) {
     }
   }
 
+  // --- Ficha de encaminhamentos: calcula o estado final e o que muda nas tabelas de ligação ---
+  let pendentesNovos = new Map<string, string>(); // núcleo de destino -> pendente criado agora
+  let servicosFinais: string[] | null = null; // não nulo = regravar o conjunto
+  let destinosRemover: { nucleo_destino_id: string; pendente_gerado_id: string | null }[] = [];
+  let destinosAdicionar: string[] = [];
+
+  if (temFicha) {
+    const [{ data: servicosAtuaisRows }, { data: internosAtuaisRows }] = await Promise.all([
+      supabaseAdmin.from("atendimento_servicos_externos").select("servico_id").eq("atendimento_id", atendimento.id),
+      supabaseAdmin
+        .from("atendimento_encaminhamentos_internos")
+        .select("nucleo_destino_id, pendente_gerado_id")
+        .eq("atendimento_id", atendimento.id),
+    ]);
+    const servicosAtuais = (servicosAtuaisRows ?? []).map((s) => s.servico_id as string);
+    const internosAtuais = (internosAtuaisRows ?? []) as { nucleo_destino_id: string; pendente_gerado_id: string | null }[];
+
+    // O que não foi enviado mantém o valor atual; registros antigos (nulos) contam como "não".
+    const estado = normalizarEstado({
+      resolvida: fichaEnviada.resolvida ?? atendimento.resolvida ?? false,
+      motivo: fichaEnviada.motivo_nao_resolvida !== undefined ? fichaEnviada.motivo_nao_resolvida : atendimento.motivo_nao_resolvida,
+      externo: fichaEnviada.houve_encaminhamento_externo ?? atendimento.houve_encaminhamento_externo ?? false,
+      servicosIds: fichaEnviada.servicos_externos_ids ?? servicosAtuais,
+      outros:
+        fichaEnviada.encaminhamento_externo_outros !== undefined
+          ? fichaEnviada.encaminhamento_externo_outros
+          : atendimento.encaminhamento_externo_outros,
+      interno: fichaEnviada.houve_encaminhamento_interno ?? atendimento.houve_encaminhamento_interno ?? false,
+      destinosIds: fichaEnviada.nucleos_destino_ids ?? internosAtuais.map((i) => i.nucleo_destino_id),
+    });
+
+    const erroFicha = await validarEstado(estado, atendimento.nucleo_id, new Set(servicosAtuais));
+    if (erroFicha) {
+      return res.status(400).json({ erro: erroFicha });
+    }
+
+    atualizacoes.resolvida = estado.resolvida;
+    atualizacoes.motivo_nao_resolvida = estado.motivo;
+    atualizacoes.houve_encaminhamento_externo = estado.externo;
+    atualizacoes.encaminhamento_externo_outros = estado.outros;
+    atualizacoes.houve_encaminhamento_interno = estado.interno;
+
+    servicosFinais = estado.servicosIds;
+
+    // Internos: só adiciona o que é NOVO; nunca duplica nem apaga pendentes já gerados.
+    const jaVinculados = new Set(internosAtuais.map((i) => i.nucleo_destino_id));
+    destinosAdicionar = estado.destinosIds.filter((id) => !jaVinculados.has(id));
+    destinosRemover = internosAtuais.filter((i) => !estado.destinosIds.includes(i.nucleo_destino_id));
+
+    // Só dá para retirar um destino cuja solicitação ainda não foi chamada.
+    const pendentesParaRetirar = destinosRemover.map((d) => d.pendente_gerado_id).filter((id): id is string => Boolean(id));
+    if (pendentesParaRetirar.length > 0) {
+      const { data: situacao, error: erroSituacao } = await supabaseAdmin
+        .from("atendimentos_pendentes")
+        .select("id, nucleo_id, status")
+        .in("id", pendentesParaRetirar);
+      if (erroSituacao) {
+        console.error(erroSituacao);
+        return res.status(500).json({ erro: "Não foi possível conferir os encaminhamentos internos." });
+      }
+      const travado = (situacao ?? []).find((p) => p.status !== "pendente_revisao");
+      if (travado) {
+        const { data: nucleoTravado } = await supabaseAdmin.from("nucleos").select("nome").eq("id", travado.nucleo_id).maybeSingle();
+        return res.status(409).json({
+          erro: `O encaminhamento para ${nucleoTravado?.nome ?? "o núcleo de destino"} não pode ser removido: a solicitação já foi chamada ou atendida.`,
+        });
+      }
+    }
+
+    if (destinosAdicionar.length > 0) {
+      // No Armazém precisa de unidade; no Itinerante a ação faz esse papel.
+      if ((atendimento.modulo === "armazem" && !atendimento.unidade_id) || !atendimento.cidadao_id) {
+        return res.status(400).json({ erro: "Este atendimento não tem unidade ou cidadão; não é possível encaminhar para outro núcleo." });
+      }
+      // A prioridade é herdada do atendimento de origem (guardada no pendente que o gerou).
+      let prioridade = false;
+      if (atendimento.pendente_id) {
+        const { data: origemPendente } = await supabaseAdmin
+          .from("atendimentos_pendentes")
+          .select("prioridade")
+          .eq("id", atendimento.pendente_id)
+          .maybeSingle();
+        prioridade = Boolean(origemPendente?.prioridade);
+      }
+      const criados = await criarPendentesDestino({
+        cidadaoId: atendimento.cidadao_id,
+        unidadeId: atendimento.unidade_id ?? null,
+        // A solicitação gerada fica no MESMO módulo (e na mesma ação) do atendimento.
+        escopo: { modulo: atendimento.modulo, acao_itinerante_id: atendimento.acao_itinerante_id ?? null },
+        prioridade,
+        destinosIds: destinosAdicionar,
+        funcionarioId: req.funcionario?.id ?? null,
+      });
+      if (!criados.ok) {
+        return res.status(500).json({ erro: criados.erro });
+      }
+      pendentesNovos = criados.ids;
+    }
+  }
+
   const { data, error } = await supabaseAdmin
     .from("atendimentos")
     .update(atualizacoes)
@@ -1030,7 +1375,66 @@ export async function atualizarAtendimento(req: Request, res: Response) {
 
   if (error) {
     console.error(error);
+    await apagarPendentes([...pendentesNovos.values()]);
     return res.status(500).json({ erro: "Não foi possível atualizar o atendimento." });
+  }
+
+  if (temFicha) {
+    // Regrava o conjunto de serviços externos.
+    if (servicosFinais) {
+      const { error: erroLimpa } = await supabaseAdmin
+        .from("atendimento_servicos_externos")
+        .delete()
+        .eq("atendimento_id", atendimento.id);
+      if (erroLimpa) console.error(erroLimpa);
+      if (servicosFinais.length > 0) {
+        const { error: erroServicos } = await supabaseAdmin
+          .from("atendimento_servicos_externos")
+          .insert(servicosFinais.map((servicoId) => ({ atendimento_id: atendimento.id, servico_id: servicoId })));
+        if (erroServicos) {
+          console.error(erroServicos);
+          return res.status(500).json({ erro: "Atendimento atualizado, mas não foi possível gravar os serviços externos." });
+        }
+      }
+    }
+
+    // Retira destinos cuja solicitação ainda não foi chamada: o vínculo sai e a solicitação é
+    // marcada como rejeitada (fica no banco para auditoria; nada é apagado).
+    for (const destino of destinosRemover) {
+      if (destino.pendente_gerado_id) {
+        const { error: erroRejeita } = await supabaseAdmin
+          .from("atendimentos_pendentes")
+          .update({
+            status: "rejeitado",
+            revisado_por: req.funcionario?.id ?? null,
+            revisado_em: new Date().toISOString(),
+          })
+          .eq("id", destino.pendente_gerado_id)
+          .eq("status", "pendente_revisao");
+        if (erroRejeita) console.error(erroRejeita);
+      }
+      const { error: erroRemove } = await supabaseAdmin
+        .from("atendimento_encaminhamentos_internos")
+        .delete()
+        .eq("atendimento_id", atendimento.id)
+        .eq("nucleo_destino_id", destino.nucleo_destino_id);
+      if (erroRemove) console.error(erroRemove);
+    }
+
+    if (destinosAdicionar.length > 0) {
+      const { error: erroInternos } = await supabaseAdmin.from("atendimento_encaminhamentos_internos").insert(
+        destinosAdicionar.map((nucleoDestinoId) => ({
+          atendimento_id: atendimento.id,
+          nucleo_destino_id: nucleoDestinoId,
+          pendente_gerado_id: pendentesNovos.get(nucleoDestinoId) ?? null,
+        }))
+      );
+      if (erroInternos) {
+        console.error(erroInternos);
+        await apagarPendentes([...pendentesNovos.values()]);
+        return res.status(500).json({ erro: "Atendimento atualizado, mas não foi possível gravar os encaminhamentos internos." });
+      }
+    }
   }
 
   res.json(data);

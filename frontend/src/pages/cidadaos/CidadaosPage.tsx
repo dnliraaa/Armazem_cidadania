@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../lib/api";
-import { formatarCpfInput, formatarDataBr, formatarTelefoneInput } from "../../utils/formatters";
+import { formatarCpfInput, formatarDataBr, formatarTelefone } from "../../utils/formatters";
 import type { Cidadao } from "../../types";
 import { CidadaoFormModal } from "./CidadaoFormModal";
 
@@ -92,10 +92,17 @@ export function CidadaosPage() {
               <tbody>
                 {cidadaos.map((c) => (
                   <tr key={c.id}>
-                    <td>{c.nome}</td>
+                    <td>
+                      {c.nome}
+                      {c.nome_social && (
+                        <div style={{ fontSize: "0.82rem", color: "var(--cor-texto-suave)" }}>
+                          Nome social: {c.nome_social}
+                        </div>
+                      )}
+                    </td>
                     <td>{c.cpf ? formatarCpfInput(c.cpf) : "—"}</td>
                     <td>{formatarDataBr(c.data_nascimento)}</td>
-                    <td>{formatarTelefoneInput(c.telefone)}</td>
+                    <td>{formatarTelefone(c.telefone)}</td>
                     <td>
                       <div className="acoes-linha">
                         <button

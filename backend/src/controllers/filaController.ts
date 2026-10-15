@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAdmin } from "../config/supabase.js";
 import { unidadeDaInfraestrutura } from "../middleware/auth.js";
+import { contextoDe } from "../middleware/contexto.js";
+import { aplicarEscopo, escopoInsert, podeEscrever } from "../utils/escopo.js";
 
 /** Data de hoje no formato YYYY-MM-DD (mesmo formato aceito pela coluna `date` do Postgres). */
 function hoje(): string {
@@ -11,8 +13,10 @@ function hoje(): string {
 /**
  * Um funcionário de nível "recepcao" só enxerga/atende a fila da própria
  * unidade. Admin (e qualquer outro nível futuro) continua vendo tudo.
+ * No Itinerante não há unidade: o recorte é a ação do contexto (`aplicarEscopo`).
  */
 function unidadeDoFuncionario(req: Request): string | null {
+  if (contextoDe(req).modulo === "itinerante") return null;
   return req.funcionario?.role === "recepcao" ? req.funcionario.unidade_id : null;
 }
 
@@ -22,9 +26,10 @@ const uuidSchema = z.string().uuid();
  * GET /api/fila aceita um `?unidade_id=` opcional (usado pelo Painel de
  * Chamados, que escolhe a unidade explicitamente e não depende do nível de
  * quem estiver logado no aparelho). Quando presente, tem prioridade sobre o
- * filtro automático por nível/unidade do funcionário.
+ * filtro automático por nível/unidade do funcionário. No Itinerante é ignorado.
  */
 function unidadeSolicitada(req: Request): string | null {
+  if (contextoDe(req).modulo === "itinerante") return null;
   const parse = uuidSchema.safeParse(req.query.unidade_id);
   return parse.success ? parse.data : unidadeDoFuncionario(req);
 }
@@ -42,32 +47,16 @@ const retirarSenhaSchema = z.object({
  * POST /api/fila/retirar
  *
  * Gera o próximo número da senha de forma atômica via a função SQL
- * `proxima_senha_numero` (precisa existir no banco — ver o SQL fornecido
- * separadamente para rodar no Supabase):
- *
- *   create or replace function proxima_senha_numero(p_tipo text)
- *   returns int
- *   language plpgsql
- *   as $$
- *   declare
- *     v_numero int;
- *   begin
- *     insert into senha_contadores (data, tipo, ultimo_numero)
- *     values (current_date, p_tipo, 1)
- *     on conflict (data, tipo)
- *     do update set ultimo_numero = senha_contadores.ultimo_numero + 1
- *     returning ultimo_numero into v_numero;
- *
- *     return v_numero;
- *   end;
- *   $$;
+ * `proxima_senha_numero(p_tipo, p_modulo, p_acao)` (ver a migration 0020). A
+ * numeração reinicia por dia, tipo e escopo: no Armazém é a de sempre; no
+ * Itinerante é independente por ação.
  *
  * O UPSERT dentro da função garante que duas retiradas simultâneas nunca
  * recebem o mesmo número, mesmo com vários totens ao mesmo tempo.
  *
- * O totem é sempre vinculado a uma unidade fixa (ver tabela `totens`) — não
- * depende de quem estiver logado no aparelho — e é isso que decide a
- * `unidade_id` gravada na senha.
+ * O totem é sempre vinculado a uma unidade fixa (Armazém) ou a uma ação
+ * (Itinerante) — não depende de quem estiver logado no aparelho — e é isso que
+ * decide a `unidade_id` / ação gravada na senha.
  */
 export async function retirarSenha(req: Request, res: Response) {
   const parse = retirarSenhaSchema.safeParse(req.body);
@@ -75,11 +64,17 @@ export async function retirarSenha(req: Request, res: Response) {
     return res.status(400).json({ erro: parse.error.issues[0]?.message ?? "Dados inválidos." });
   }
 
+  const ctx = contextoDe(req);
+  if (!podeEscrever(ctx)) {
+    return res.status(400).json({ erro: "Selecione uma ação itinerante.", codigo: "ACAO_OBRIGATORIA" });
+  }
   const { tipo, totem_id } = parse.data;
 
-  const { data: totem, error: erroTotem } = await supabaseAdmin
-    .from("totens")
-    .select("id, unidade_id, ativo")
+  // O totem precisa ser do módulo/ação do contexto (um id de outro módulo é tratado como inexistente).
+  const { data: totem, error: erroTotem } = await aplicarEscopo(
+    supabaseAdmin.from("totens").select("id, unidade_id, ativo"),
+    ctx
+  )
     .eq("id", totem_id)
     .maybeSingle();
 
@@ -90,13 +85,17 @@ export async function retirarSenha(req: Request, res: Response) {
   if (!totem || !totem.ativo) {
     return res.status(400).json({ erro: "Totem não configurado ou inativo. Configure o totem novamente." });
   }
-  // Infraestrutura só opera totens da própria unidade.
+  // Infraestrutura só opera totens da própria unidade (no Armazém).
   const unidadeInfra = unidadeDaInfraestrutura(req);
   if (unidadeInfra && totem.unidade_id !== unidadeInfra) {
     return res.status(403).json({ erro: "Este totem não pertence à sua unidade." });
   }
 
-  const { data: numero, error: erroNumero } = await supabaseAdmin.rpc("proxima_senha_numero", { p_tipo: tipo });
+  const { data: numero, error: erroNumero } = await supabaseAdmin.rpc("proxima_senha_numero", {
+    p_tipo: tipo,
+    p_modulo: ctx.modulo,
+    p_acao: ctx.modulo === "itinerante" ? ctx.acaoId : null,
+  });
 
   if (erroNumero || typeof numero !== "number") {
     console.error(erroNumero);
@@ -105,7 +104,14 @@ export async function retirarSenha(req: Request, res: Response) {
 
   const { data, error } = await supabaseAdmin
     .from("senhas")
-    .insert({ data: hoje(), tipo, numero, status: "aguardando", unidade_id: totem.unidade_id })
+    .insert({
+      data: hoje(),
+      tipo,
+      numero,
+      status: "aguardando",
+      unidade_id: totem.unidade_id,
+      ...escopoInsert(ctx),
+    })
     .select("*")
     .single();
 
@@ -119,27 +125,22 @@ export async function retirarSenha(req: Request, res: Response) {
 
 /** GET /api/fila?unidade_id= — senhas do dia: aguardando (por tipo) e as últimas chamadas. */
 export async function listarFila(req: Request, res: Response) {
+  const ctx = contextoDe(req);
   const dataHoje = hoje();
   const unidadeId = unidadeSolicitada(req);
 
-  let consultaAguardando = supabaseAdmin
-    .from("senhas")
-    .select("*")
+  let consultaAguardando = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx)
     .eq("data", dataHoje)
     .eq("status", "aguardando")
     .order("criada_em", { ascending: true });
-  let consultaChamadas = supabaseAdmin
-    .from("senhas")
-    .select("*")
+  let consultaChamadas = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx)
     .eq("data", dataHoje)
     .eq("status", "chamada")
     .order("chamada_em", { ascending: false })
     .limit(5);
 
   // Histórico do dia: tudo que já saiu de 'aguardando', da mais recente para a mais antiga.
-  let consultaHistorico = supabaseAdmin
-    .from("senhas")
-    .select("*")
+  let consultaHistorico = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx)
     .eq("data", dataHoje)
     .in("status", ["chamada", "atendida", "perdida"])
     .order("chamada_em", { ascending: false, nullsFirst: false });
@@ -196,6 +197,7 @@ export async function listarFila(req: Request, res: Response) {
  *      menos 1 normal nesse intervalo, sugere a prioritária; senão, a normal.
  */
 export async function proximaSenhaSugerida(req: Request, res: Response) {
+  const ctx = contextoDe(req);
   const dataHoje = hoje();
   const unidadeId = unidadeDoFuncionario(req);
 
@@ -205,18 +207,14 @@ export async function proximaSenhaSugerida(req: Request, res: Response) {
   // filtro, ela reapareceria aqui por ser a mais antiga da fila do seu tipo.
   const NAO_TRAVADA_EM_RECALL = "aguardando_recall.eq.false,recall_liberado.eq.true";
 
-  let consultaPrioritaria = supabaseAdmin
-    .from("senhas")
-    .select("*")
+  let consultaPrioritaria = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx)
     .eq("data", dataHoje)
     .eq("status", "aguardando")
     .eq("tipo", "prioritaria")
     .or(NAO_TRAVADA_EM_RECALL)
     .order("criada_em", { ascending: true })
     .limit(1);
-  let consultaNormal = supabaseAdmin
-    .from("senhas")
-    .select("*")
+  let consultaNormal = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx)
     .eq("data", dataHoje)
     .eq("status", "aguardando")
     .eq("tipo", "normal")
@@ -242,9 +240,7 @@ export async function proximaSenhaSugerida(req: Request, res: Response) {
   // Prioridade máxima: uma senha que não compareceu na 1ª tentativa e já
   // passou por pelo menos uma outra chamada no meio (2ª e última chance),
   // furando a fila da alternância normal/prioritária.
-  let consultaRecall = supabaseAdmin
-    .from("senhas")
-    .select("*")
+  let consultaRecall = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx)
     .eq("data", dataHoje)
     .eq("status", "aguardando")
     .eq("aguardando_recall", true)
@@ -271,9 +267,7 @@ export async function proximaSenhaSugerida(req: Request, res: Response) {
   // não liberadas) e não há nenhuma outra para servir de "chamada no meio",
   // essa liberação nunca aconteceria sozinha — sugere a mais antiga mesmo assim.
   if (!prioridadeEspera && !normalEspera) {
-    let consultaPresas = supabaseAdmin
-      .from("senhas")
-      .select("*")
+    let consultaPresas = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx)
       .eq("data", dataHoje)
       .eq("status", "aguardando")
       .eq("aguardando_recall", true)
@@ -306,9 +300,7 @@ export async function proximaSenhaSugerida(req: Request, res: Response) {
   // Há as duas esperando: conta quantas normais já foram chamadas hoje
   // desde a última prioritária chamada (ou desde o início do dia, se nenhuma
   // prioritária foi chamada ainda hoje).
-  let consultaUltimaPrioritaria = supabaseAdmin
-    .from("senhas")
-    .select("chamada_em")
+  let consultaUltimaPrioritaria = aplicarEscopo(supabaseAdmin.from("senhas").select("chamada_em"), ctx)
     .eq("data", dataHoje)
     .eq("tipo", "prioritaria")
     .not("chamada_em", "is", null)
@@ -327,9 +319,10 @@ export async function proximaSenhaSugerida(req: Request, res: Response) {
 
   const desde = ultimaPrioritariaChamada?.[0]?.chamada_em ?? null;
 
-  let consultaNormaisChamadas = supabaseAdmin
-    .from("senhas")
-    .select("id", { count: "exact", head: true })
+  let consultaNormaisChamadas = aplicarEscopo(
+    supabaseAdmin.from("senhas").select("id", { count: "exact", head: true }),
+    ctx
+  )
     .eq("data", dataHoje)
     .eq("tipo", "normal")
     .not("chamada_em", "is", null);
@@ -366,10 +359,11 @@ const chamarSenhaSchema = z.object({
  *   - Se a própria senha estava em `aguardando_recall` (ou seja, esta é a
  *     2ª tentativa dela), zera `aguardando_recall`/`recall_liberado`.
  *   - Libera (`recall_liberado = true`) qualquer OUTRA senha da mesma
- *     unidade que estava esperando rechamada — passou pelo menos uma
+ *     unidade/ação que estava esperando rechamada — passou pelo menos uma
  *     chamada no meio, então já pode ser sugerida de novo.
  */
 export async function chamarSenha(req: Request, res: Response) {
+  const ctx = contextoDe(req);
   const { id } = req.params;
   const parse = chamarSenhaSchema.safeParse(req.body ?? {});
   if (!parse.success) {
@@ -377,7 +371,7 @@ export async function chamarSenha(req: Request, res: Response) {
   }
 
   const unidadeId = unidadeDoFuncionario(req);
-  let consultaAtual = supabaseAdmin.from("senhas").select("*").eq("id", id);
+  let consultaAtual = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx).eq("id", id);
   if (unidadeId) {
     consultaAtual = consultaAtual.eq("unidade_id", unidadeId);
   }
@@ -403,9 +397,7 @@ export async function chamarSenha(req: Request, res: Response) {
     atualizacoes.guiche = parse.data.guiche || null;
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("senhas")
-    .update(atualizacoes)
+  const { data, error } = await aplicarEscopo(supabaseAdmin.from("senhas").update(atualizacoes), ctx)
     .eq("id", id)
     .select("*")
     .maybeSingle();
@@ -418,9 +410,7 @@ export async function chamarSenha(req: Request, res: Response) {
     return res.status(404).json({ erro: "Senha não encontrada." });
   }
 
-  let liberaRecall = supabaseAdmin
-    .from("senhas")
-    .update({ recall_liberado: true })
+  let liberaRecall = aplicarEscopo(supabaseAdmin.from("senhas").update({ recall_liberado: true }), ctx)
     .eq("data", data.data)
     .eq("status", "aguardando")
     .eq("aguardando_recall", true)
@@ -443,11 +433,12 @@ export async function chamarSenha(req: Request, res: Response) {
  *
  * Só vale para senha 'perdida' com exatamente 2 tentativas (já esgotou o
  * ciclo automático e ainda não usou a rechamada manual) e enquanto não houver
- * outra senha 'chamada' em aberto na unidade. A 3ª tentativa sai do ciclo de
+ * outra senha 'chamada' em aberto na unidade/ação. A 3ª tentativa sai do ciclo de
  * recall: se não comparecer de novo, `marcarPerdida` a descarta de vez
  * (tentativas = 3, então não volta a ser elegível aqui).
  */
 export async function rechamarManual(req: Request, res: Response) {
+  const ctx = contextoDe(req);
   const { id } = req.params;
   const parse = chamarSenhaSchema.safeParse(req.body ?? {});
   if (!parse.success) {
@@ -455,7 +446,7 @@ export async function rechamarManual(req: Request, res: Response) {
   }
 
   const unidadeId = unidadeDoFuncionario(req);
-  let consultaAtual = supabaseAdmin.from("senhas").select("*").eq("id", id);
+  let consultaAtual = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx).eq("id", id);
   if (unidadeId) {
     consultaAtual = consultaAtual.eq("unidade_id", unidadeId);
   }
@@ -472,9 +463,10 @@ export async function rechamarManual(req: Request, res: Response) {
     return res.status(409).json({ erro: "Só é possível rechamar manualmente uma senha descartada que ainda não usou a rechamada manual." });
   }
 
-  let consultaEmAberto = supabaseAdmin
-    .from("senhas")
-    .select("id", { count: "exact", head: true })
+  let consultaEmAberto = aplicarEscopo(
+    supabaseAdmin.from("senhas").select("id", { count: "exact", head: true }),
+    ctx
+  )
     .eq("data", atual.data)
     .eq("status", "chamada");
   consultaEmAberto = atual.unidade_id
@@ -503,9 +495,7 @@ export async function rechamarManual(req: Request, res: Response) {
   }
 
   // Condição repetida no update para não rechamar duas vezes em cliques simultâneos.
-  const { data, error } = await supabaseAdmin
-    .from("senhas")
-    .update(atualizacoes)
+  const { data, error } = await aplicarEscopo(supabaseAdmin.from("senhas").update(atualizacoes), ctx)
     .eq("id", id)
     .eq("status", "perdida")
     .eq("tentativas", 2)
@@ -525,13 +515,14 @@ export async function rechamarManual(req: Request, res: Response) {
 
 /** POST /api/fila/:id/atendida */
 export async function marcarAtendida(req: Request, res: Response) {
+  const ctx = contextoDe(req);
   const { id } = req.params;
 
   const unidadeId = unidadeDoFuncionario(req);
-  let query = supabaseAdmin
-    .from("senhas")
-    .update({ status: "atendida", atendida_em: new Date().toISOString() })
-    .eq("id", id);
+  let query = aplicarEscopo(
+    supabaseAdmin.from("senhas").update({ status: "atendida", atendida_em: new Date().toISOString() }),
+    ctx
+  ).eq("id", id);
   if (unidadeId) {
     query = query.eq("unidade_id", unidadeId);
   }
@@ -558,10 +549,11 @@ export async function marcarAtendida(req: Request, res: Response) {
  * verdade (`status = 'perdida'`).
  */
 export async function marcarPerdida(req: Request, res: Response) {
+  const ctx = contextoDe(req);
   const { id } = req.params;
 
   const unidadeId = unidadeDoFuncionario(req);
-  let consultaAtual = supabaseAdmin.from("senhas").select("*").eq("id", id);
+  let consultaAtual = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx).eq("id", id);
   if (unidadeId) {
     consultaAtual = consultaAtual.eq("unidade_id", unidadeId);
   }
@@ -583,9 +575,10 @@ export async function marcarPerdida(req: Request, res: Response) {
   // acontecer — então já libera agora para a senha não ficar presa.
   let recallLiberado = false;
   if (primeiraVez) {
-    let consultaOutras = supabaseAdmin
-      .from("senhas")
-      .select("id", { count: "exact", head: true })
+    let consultaOutras = aplicarEscopo(
+      supabaseAdmin.from("senhas").select("id", { count: "exact", head: true }),
+      ctx
+    )
       .eq("data", atual.data)
       .eq("status", "aguardando")
       .neq("id", id)
@@ -606,9 +599,7 @@ export async function marcarPerdida(req: Request, res: Response) {
     ? { status: "aguardando", aguardando_recall: true, recall_liberado: recallLiberado }
     : { status: "perdida", aguardando_recall: false, recall_liberado: false };
 
-  const { data, error } = await supabaseAdmin
-    .from("senhas")
-    .update(atualizacoes)
+  const { data, error } = await aplicarEscopo(supabaseAdmin.from("senhas").update(atualizacoes), ctx)
     .eq("id", id)
     .select("*")
     .maybeSingle();

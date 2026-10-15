@@ -2,27 +2,32 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import logoAzul from "../../assets/logo.png";
 import { useAuth } from "../../contexts/AuthContext";
+import { useModulo } from "../../contexts/ModuloContext";
 import { api, ApiError } from "../../lib/api";
 import { formatarCodigoSenha } from "../fila/filaUtils";
 import type { Senha, Totem } from "../../types";
 
 const DURACAO_TELA_SENHA_MS = 5000;
-const CHAVE_TOTEM = "armazem_totem_id";
 
-function lerTotemSalvo(): string | null {
+/** O totem configurado neste aparelho é guardado por módulo (e ação), para um não interferir no outro. */
+function chaveTotem(modulo: string, acaoId: string | null): string {
+  return modulo === "itinerante" ? `armazem_totem_id_itinerante_${acaoId ?? ""}` : "armazem_totem_id";
+}
+
+function lerTotemSalvo(chave: string): string | null {
   try {
-    return localStorage.getItem(CHAVE_TOTEM);
+    return localStorage.getItem(chave);
   } catch {
     return null;
   }
 }
 
-function salvarTotem(id: string | null) {
+function salvarTotem(chave: string, id: string | null) {
   try {
     if (id) {
-      localStorage.setItem(CHAVE_TOTEM, id);
+      localStorage.setItem(chave, id);
     } else {
-      localStorage.removeItem(CHAVE_TOTEM);
+      localStorage.removeItem(chave);
     }
   } catch {
     // Sem acesso ao localStorage (ex.: navegação privada) — segue sem persistir.
@@ -67,6 +72,7 @@ function estiloBotaoGrande(cor: string): CSSProperties {
  */
 function ConfigurarTotem({ onConfigurado }: { onConfigurado: (totem: Totem) => void }) {
   const { sair, funcionario } = useAuth();
+  const { modulo } = useModulo();
   const [totens, setTotens] = useState<Totem[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -74,8 +80,13 @@ function ConfigurarTotem({ onConfigurado }: { onConfigurado: (totem: Totem) => v
   useEffect(() => {
     api
       .get<Totem[]>("/totens")
-      // A unidade é fixa: só os totens ativos cadastrados na unidade do funcionário (o backend já filtra).
-      .then((dados) => setTotens(dados.filter((t) => t.ativo && t.unidade_id === funcionario?.unidade_id)))
+      // Armazém: a unidade é fixa — só os totens ativos da unidade do funcionário. Itinerante: o backend
+      // já devolve só os totens da ação em uso. (Em ambos o backend filtra; aqui é a segunda barreira.)
+      .then((dados) =>
+        setTotens(
+          dados.filter((t) => t.ativo && (modulo === "itinerante" || t.unidade_id === funcionario?.unidade_id))
+        )
+      )
       .catch((err) => setErro(err instanceof ApiError ? err.message : "Não foi possível carregar os totens."))
       .finally(() => setCarregando(false));
   }, []);
@@ -133,7 +144,9 @@ function ConfigurarTotem({ onConfigurado }: { onConfigurado: (totem: Totem) => v
  */
 export function TotemPage() {
   const { sair } = useAuth();
-  const [totemId, setTotemId] = useState<string | null>(lerTotemSalvo);
+  const { modulo, acao, base } = useModulo();
+  const chave = chaveTotem(modulo, acao?.id ?? null);
+  const [totemId, setTotemId] = useState<string | null>(() => lerTotemSalvo(chave));
   const [totemNome, setTotemNome] = useState<string | null>(null);
   const [enviando, setEnviando] = useState<"normal" | "prioritaria" | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -157,7 +170,7 @@ export function TotemPage() {
         if (atual) {
           setTotemNome(atual.nome);
         } else {
-          salvarTotem(null);
+          salvarTotem(chave, null);
           setTotemId(null);
         }
       })
@@ -165,16 +178,16 @@ export function TotemPage() {
         // Falha de rede momentânea: mantém o totem configurado, só não
         // mostra o nome agora.
       });
-  }, [totemId, totemNome]);
+  }, [totemId, totemNome, chave]);
 
   function handleConfigurado(totem: Totem) {
-    salvarTotem(totem.id);
+    salvarTotem(chave, totem.id);
     setTotemId(totem.id);
     setTotemNome(totem.nome);
   }
 
   function handleTrocarTotem() {
-    salvarTotem(null);
+    salvarTotem(chave, null);
     setTotemId(null);
     setTotemNome(null);
   }
@@ -265,7 +278,7 @@ export function TotemPage() {
         {totemNome && (
           <span style={{ fontSize: "0.8rem", color: "var(--cor-texto-suave)" }}>{totemNome}</span>
         )}
-        <Link to="/infraestrutura" className="btn btn-secundario btn-pequeno">
+        <Link to={`${base}/infraestrutura`} className="btn btn-secundario btn-pequeno">
           Menu
         </Link>
         <button className="btn btn-secundario btn-pequeno" onClick={handleTrocarTotem}>

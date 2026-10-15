@@ -82,6 +82,7 @@ export function FuncionariosPage() {
                   <th>E-mail</th>
                   <th>Nível</th>
                   <th>Unidade / Núcleo</th>
+                  <th>Módulos</th>
                   <th>Status</th>
                   <th>Ações</th>
                 </tr>
@@ -97,6 +98,15 @@ export function FuncionariosPage() {
                       {f.role === "nucleo"
                         ? [f.nucleo_nome, f.unidade_nome].filter(Boolean).join(" — ") || "—"
                         : f.unidade_nome ?? "—"}
+                    </td>
+                    <td>
+                      {/* Selos dos módulos de acesso (o admin acessa os dois sempre). */}
+                      <div className="acoes-linha">
+                        {(f.role === "admin" || f.acesso_armazem) && <span className="badge badge-ativo">Armazém</span>}
+                        {(f.role === "admin" || f.acesso_itinerante) && (
+                          <span className="badge badge-alerta">Itinerante</span>
+                        )}
+                      </div>
                     </td>
                     <td>
                       <span className={`badge ${f.ativo ? "badge-ativo" : "badge-inativo"}`}>

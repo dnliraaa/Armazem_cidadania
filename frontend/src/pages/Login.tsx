@@ -11,7 +11,7 @@ export function Login() {
   const [enviando, setEnviando] = useState(false);
 
   if (session) {
-    return <Navigate to="/cidadaos" replace />;
+    return <Navigate to="/modulos" replace />;
   }
 
   async function handleSubmit(e: FormEvent) {

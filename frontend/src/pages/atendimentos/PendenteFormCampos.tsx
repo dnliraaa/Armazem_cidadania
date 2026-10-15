@@ -1,3 +1,4 @@
+﻿import type { ReactNode } from "react";
 import { cpfValido, formatarCpfInput, somenteDigitos } from "../../utils/formatters";
 import type { Demanda } from "../../types";
 
@@ -14,10 +15,12 @@ interface Props {
   onDemandaPrincipalChange: (id: string) => void;
   outrasDemandas: string[];
   onToggleOutraDemanda: (id: string) => void;
-  resolvida: boolean;
-  onResolvidaChange: (valor: boolean) => void;
-  houveEncaminhamento: boolean;
-  onHouveEncaminhamentoChange: (valor: boolean) => void;
+  resolvida?: boolean;
+  onResolvidaChange?: (valor: boolean) => void;
+  houveEncaminhamento?: boolean;
+  onHouveEncaminhamentoChange?: (valor: boolean) => void;
+  /** Com `blocoResolucao`, ele substitui os campos antigos "Resolvida?" e "Houve encaminhamento?" (ficha nova do núcleo). */
+  blocoResolucao?: ReactNode;
   /** Com `onDescricaoChange`, exibe o campo opcional "Descrição" do atendimento. */
   descricao?: string;
   onDescricaoChange?: (valor: string) => void;
@@ -39,6 +42,7 @@ export function PendenteFormCampos({
   onResolvidaChange,
   houveEncaminhamento,
   onHouveEncaminhamentoChange,
+  blocoResolucao,
   descricao,
   onDescricaoChange,
 }: Props) {
@@ -113,41 +117,45 @@ export function PendenteFormCampos({
         ))}
       </div>
 
-      <div className="campo">
-        <label>A demanda foi resolvida?</label>
-        <div className="acoes-linha">
-          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
-            <input type="radio" name="resolvida" checked={resolvida} onChange={() => onResolvidaChange(true)} /> Sim
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
-            <input type="radio" name="resolvida" checked={!resolvida} onChange={() => onResolvidaChange(false)} /> Não
-          </label>
-        </div>
-      </div>
+      {blocoResolucao ?? (
+        <>
+          <div className="campo">
+            <label>A demanda foi resolvida?</label>
+            <div className="acoes-linha">
+              <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
+                <input type="radio" name="resolvida" checked={Boolean(resolvida)} onChange={() => onResolvidaChange?.(true)} /> Sim
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
+                <input type="radio" name="resolvida" checked={!resolvida} onChange={() => onResolvidaChange?.(false)} /> Não
+              </label>
+            </div>
+          </div>
 
-      <div className="campo">
-        <label>Houve encaminhamento?</label>
-        <div className="acoes-linha">
-          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
-            <input
-              type="radio"
-              name="encaminhamento"
-              checked={houveEncaminhamento}
-              onChange={() => onHouveEncaminhamentoChange(true)}
-            />{" "}
-            Sim
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
-            <input
-              type="radio"
-              name="encaminhamento"
-              checked={!houveEncaminhamento}
-              onChange={() => onHouveEncaminhamentoChange(false)}
-            />{" "}
-            Não
-          </label>
-        </div>
-      </div>
+          <div className="campo">
+            <label>Houve encaminhamento?</label>
+            <div className="acoes-linha">
+              <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
+                <input
+                  type="radio"
+                  name="encaminhamento"
+                  checked={Boolean(houveEncaminhamento)}
+                  onChange={() => onHouveEncaminhamentoChange?.(true)}
+                />{" "}
+                Sim
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
+                <input
+                  type="radio"
+                  name="encaminhamento"
+                  checked={!houveEncaminhamento}
+                  onChange={() => onHouveEncaminhamentoChange?.(false)}
+                />{" "}
+                Não
+              </label>
+            </div>
+          </div>
+        </>
+      )}
 
       {onDescricaoChange && (
         <div className="campo">

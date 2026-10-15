@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAdmin } from "../config/supabase.js";
 import { unidadeDaInfraestrutura } from "../middleware/auth.js";
+import { contextoDe } from "../middleware/contexto.js";
+import { aplicarEscopo } from "../utils/escopo.js";
 
 const LIMITE_HISTORICO = 8;
 
@@ -42,37 +44,52 @@ function codigoSenha(tipo: string, numero: number): string {
  *     recente para a mais antiga, sem repetir a chamada atual.
  */
 export async function obterPainel(req: Request, res: Response) {
-  const parse = z.string().uuid("Unidade inválida.").safeParse(req.query.unidade_id);
-  if (!parse.success) {
-    return res.status(400).json({ erro: parse.error.issues[0]?.message ?? "Informe a unidade." });
-  }
-  const unidadeId = parse.data;
-  // Infraestrutura só consulta o painel da própria unidade.
-  const unidadeInfra = unidadeDaInfraestrutura(req);
-  if (unidadeInfra && unidadeInfra !== unidadeId) {
-    return res.status(403).json({ erro: "Você só pode acessar o painel da sua unidade." });
+  const ctx = contextoDe(req);
+
+  // Armazém: o painel é de uma unidade. Itinerante: não há unidade, o painel é da ação do contexto.
+  let unidadeId: string | null = null;
+  if (ctx.modulo === "armazem") {
+    const parse = z.string().uuid("Unidade inválida.").safeParse(req.query.unidade_id);
+    if (!parse.success) {
+      return res.status(400).json({ erro: parse.error.issues[0]?.message ?? "Informe a unidade." });
+    }
+    unidadeId = parse.data;
+    // Infraestrutura só consulta o painel da própria unidade.
+    const unidadeInfra = unidadeDaInfraestrutura(req);
+    if (unidadeInfra && unidadeInfra !== unidadeId) {
+      return res.status(403).json({ erro: "Você só pode acessar o painel da sua unidade." });
+    }
+  } else if (!ctx.acaoId) {
+    return res.status(400).json({ erro: "Selecione uma ação itinerante.", codigo: "ACAO_OBRIGATORIA" });
   }
   const dataHoje = hoje();
   const inicioDoDia = `${dataHoje}T00:00:00.000Z`;
 
+  let consultaSenhas = aplicarEscopo(
+    supabaseAdmin.from("senhas").select("id, tipo, numero, status, guiche, tentativas, chamada_em"),
+    ctx
+  )
+    .eq("data", dataHoje)
+    .in("status", ["chamada", "atendida", "perdida"])
+    .not("chamada_em", "is", null)
+    .order("chamada_em", { ascending: false })
+    .limit(LIMITE_HISTORICO + 1);
+  let consultaPendentes = aplicarEscopo(
+    supabaseAdmin.from("atendimentos_pendentes").select("id, nome, cidadao_id, nucleo_id, sala, status, chamado_em"),
+    ctx
+  )
+    .in("status", ["em_atendimento", "confirmado"])
+    .gte("chamado_em", inicioDoDia)
+    .order("chamado_em", { ascending: false })
+    .limit(LIMITE_HISTORICO + 1);
+  if (unidadeId) {
+    consultaSenhas = consultaSenhas.eq("unidade_id", unidadeId);
+    consultaPendentes = consultaPendentes.eq("unidade_id", unidadeId);
+  }
+
   const [{ data: senhas, error: erroSenhas }, { data: pendentes, error: erroPendentes }] = await Promise.all([
-    supabaseAdmin
-      .from("senhas")
-      .select("id, tipo, numero, status, guiche, tentativas, chamada_em")
-      .eq("data", dataHoje)
-      .eq("unidade_id", unidadeId)
-      .in("status", ["chamada", "atendida", "perdida"])
-      .not("chamada_em", "is", null)
-      .order("chamada_em", { ascending: false })
-      .limit(LIMITE_HISTORICO + 1),
-    supabaseAdmin
-      .from("atendimentos_pendentes")
-      .select("id, nome, cidadao_id, nucleo_id, sala, status, chamado_em")
-      .eq("unidade_id", unidadeId)
-      .in("status", ["em_atendimento", "confirmado"])
-      .gte("chamado_em", inicioDoDia)
-      .order("chamado_em", { ascending: false })
-      .limit(LIMITE_HISTORICO + 1),
+    consultaSenhas,
+    consultaPendentes,
   ]);
 
   if (erroSenhas || erroPendentes) {
@@ -85,13 +102,14 @@ export async function obterPainel(req: Request, res: Response) {
 
   const [{ data: cidadaos }, { data: nucleos }] = await Promise.all([
     cidadaoIds.length
-      ? supabaseAdmin.from("cidadaos").select("id, nome").in("id", cidadaoIds)
-      : Promise.resolve({ data: [] as { id: string; nome: string }[] }),
+      ? supabaseAdmin.from("cidadaos").select("id, nome, nome_social").in("id", cidadaoIds)
+      : Promise.resolve({ data: [] as { id: string; nome: string; nome_social: string | null }[] }),
     nucleoIds.length
       ? supabaseAdmin.from("nucleos").select("id, nome").in("id", nucleoIds)
       : Promise.resolve({ data: [] as { id: string; nome: string }[] }),
   ]);
-  const cidadaoMap = new Map((cidadaos ?? []).map((c) => [c.id, c.nome]));
+  // Nome chamado no painel: o nome social, quando preenchido; senão o nome completo.
+  const cidadaoMap = new Map((cidadaos ?? []).map((c) => [c.id, c.nome_social?.trim() || c.nome]));
   const nucleoMap = new Map((nucleos ?? []).map((n) => [n.id, n.nome]));
 
   // Em andamento = ainda não finalizada (senha 'chamada' / pendente 'em_atendimento').

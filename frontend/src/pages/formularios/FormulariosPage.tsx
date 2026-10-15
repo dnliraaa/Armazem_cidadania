@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import { IconChevronDown } from "../../components/icons";
 import { api, ApiError } from "../../lib/api";
-import type { Demanda, Nucleo } from "../../types";
+import type { Demanda, Nucleo, ServicoExterno } from "../../types";
 import { DemandaFormModal } from "./DemandaFormModal";
 import { NucleoFormModal } from "./NucleoFormModal";
+import { ServicoExternoFormModal } from "./ServicoExternoFormModal";
 
 export function FormulariosPage() {
   const [nucleos, setNucleos] = useState<Nucleo[]>([]);
+  const [servicos, setServicos] = useState<ServicoExterno[]>([]);
+  const [modalServico, setModalServico] = useState<{
+    aberto: boolean;
+    nucleoId: string;
+    servico: ServicoExterno | null;
+  }>({ aberto: false, nucleoId: "", servico: null });
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
@@ -25,8 +32,12 @@ export function FormulariosPage() {
     setCarregando(true);
     setErro(null);
     try {
-      const dados = await api.get<Nucleo[]>("/nucleos");
+      const [dados, servicosDados] = await Promise.all([
+        api.get<Nucleo[]>("/nucleos"),
+        api.get<ServicoExterno[]>("/servicos-externos"),
+      ]);
       setNucleos(dados);
+      setServicos(servicosDados);
     } catch (err) {
       setErro(err instanceof ApiError ? err.message : "Não foi possível carregar os núcleos.");
     } finally {
@@ -61,6 +72,15 @@ export function FormulariosPage() {
       carregar();
     } catch (err) {
       alert(err instanceof ApiError ? err.message : "Não foi possível remover o núcleo.");
+    }
+  }
+
+  async function handleAlternarServico(servico: ServicoExterno) {
+    try {
+      await api.put(`/servicos-externos/${servico.id}`, { ativo: !servico.ativo });
+      carregar();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : "Não foi possível atualizar o serviço externo.");
     }
   }
 
@@ -181,6 +201,64 @@ export function FormulariosPage() {
                         </table>
                       </div>
                     )}
+
+                    <h4 style={{ margin: "1.5rem 0 0.5rem" }}>Serviços externos</h4>
+                    <div className="acoes-linha" style={{ justifyContent: "flex-end", marginBottom: "0.75rem" }}>
+                      <button
+                        className="btn btn-secundario btn-pequeno"
+                        onClick={() => setModalServico({ aberto: true, nucleoId: nucleo.id, servico: null })}
+                      >
+                        + Novo serviço externo
+                      </button>
+                    </div>
+
+                    {servicos.filter((s) => s.nucleo_id === nucleo.id).length === 0 ? (
+                      <p className="vazio">Nenhum serviço externo cadastrado neste núcleo.</p>
+                    ) : (
+                      <div className="tabela-responsiva">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Nome</th>
+                              <th>Status</th>
+                              <th>Ações</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {servicos
+                              .filter((s) => s.nucleo_id === nucleo.id)
+                              .map((servico) => (
+                                <tr key={servico.id}>
+                                  <td>{servico.nome}</td>
+                                  <td>
+                                    <span className={`badge ${servico.ativo ? "badge-ativo" : "badge-inativo"}`}>
+                                      {servico.ativo ? "Ativo" : "Inativo"}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <div className="acoes-linha">
+                                      <button
+                                        className="btn btn-secundario btn-pequeno"
+                                        onClick={() =>
+                                          setModalServico({ aberto: true, nucleoId: nucleo.id, servico })
+                                        }
+                                      >
+                                        Editar
+                                      </button>
+                                      <button
+                                        className={`btn btn-pequeno ${servico.ativo ? "btn-perigo" : "btn-secundario"}`}
+                                        onClick={() => handleAlternarServico(servico)}
+                                      >
+                                        {servico.ativo ? "Desativar" : "Ativar"}
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -195,6 +273,18 @@ export function FormulariosPage() {
           onFechar={() => setModalNucleo({ aberto: false, nucleo: null })}
           onSalvo={() => {
             setModalNucleo({ aberto: false, nucleo: null });
+            carregar();
+          }}
+        />
+      )}
+
+      {modalServico.aberto && (
+        <ServicoExternoFormModal
+          nucleoId={modalServico.nucleoId}
+          servico={modalServico.servico}
+          onFechar={() => setModalServico({ aberto: false, nucleoId: "", servico: null })}
+          onSalvo={() => {
+            setModalServico({ aberto: false, nucleoId: "", servico: null });
             carregar();
           }}
         />

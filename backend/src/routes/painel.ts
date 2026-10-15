@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { obterPainel } from "../controllers/painelController.js";
 import { exigirAutenticacao, exigirNivel } from "../middleware/auth.js";
+import { resolverContextoModulo } from "../middleware/contexto.js";
 
 const router = Router();
 
 // O painel é exclusivo da infraestrutura (só da própria unidade — conferido no controller).
-router.use(exigirAutenticacao, exigirNivel("infraestrutura"));
+router.use(exigirAutenticacao, resolverContextoModulo, exigirNivel("infraestrutura"));
 
 router.get("/", obterPainel);
 

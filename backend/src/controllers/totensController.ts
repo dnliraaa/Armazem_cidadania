@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAdmin } from "../config/supabase.js";
 import { unidadeDaInfraestrutura } from "../middleware/auth.js";
+import { contextoDe } from "../middleware/contexto.js";
+import { aplicarEscopo, escopoInsert } from "../utils/escopo.js";
 
 const criarTotemSchema = z.object({
   nome: z.string().trim().min(2, "Informe o nome do totem."),
@@ -16,7 +18,10 @@ const atualizarTotemSchema = z.object({
 
 /** GET /api/totens — inclui o nome da unidade de cada totem. */
 export async function listarTotens(req: Request, res: Response) {
-  let consulta = supabaseAdmin.from("totens").select("*, unidades(nome)").order("nome", { ascending: true });
+  // Só os totens do módulo (e, no Itinerante, da ação) do contexto.
+  let consulta = aplicarEscopo(supabaseAdmin.from("totens").select("*, unidades(nome)"), contextoDe(req)).order("nome", {
+    ascending: true,
+  });
   // Infraestrutura só enxerga os totens da própria unidade.
   const unidadeInfra = unidadeDaInfraestrutura(req);
   if (unidadeInfra) consulta = consulta.eq("unidade_id", unidadeInfra);
@@ -42,9 +47,14 @@ export async function criarTotem(req: Request, res: Response) {
     return res.status(400).json({ erro: parse.error.issues[0]?.message ?? "Dados inválidos." });
   }
 
+  const ctx = contextoDe(req);
+  if (ctx.modulo !== "armazem") {
+    return res.status(400).json({ erro: "Os totens do Itinerante são cadastrados na tela de Ações Itinerantes." });
+  }
+
   const { data, error } = await supabaseAdmin
     .from("totens")
-    .insert({ ...parse.data, ativo: true })
+    .insert({ ...parse.data, ativo: true, ...escopoInsert(ctx) })
     .select("*, unidades(nome)")
     .single();
 
@@ -65,9 +75,8 @@ export async function atualizarTotem(req: Request, res: Response) {
     return res.status(400).json({ erro: parse.error.issues[0]?.message ?? "Dados inválidos." });
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("totens")
-    .update(parse.data)
+  // O totem precisa ser do módulo do contexto (um id de outro módulo não é encontrado).
+  const { data, error } = await aplicarEscopo(supabaseAdmin.from("totens").update(parse.data), contextoDe(req))
     .eq("id", id)
     .select("*, unidades(nome)")
     .single();

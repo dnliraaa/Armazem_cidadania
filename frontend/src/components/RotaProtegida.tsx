@@ -1,13 +1,14 @@
 import type { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
+import { useModuloOpcional } from "../contexts/ModuloContext";
 import { nivelPermitido, rotaInicial } from "../lib/acesso";
 
 interface Props {
   children: ReactNode;
   /**
    * Níveis com acesso à rota (ex.: ["recepcao"]). "amplo" representa todos os
-   * níveis que não são recepção nem núcleo (admin, atendente…). Sem a prop, basta estar logado.
+   * níveis que não são recepção, núcleo nem infraestrutura (admin, atendente…). Sem a prop, basta estar logado.
    */
   niveis?: string[];
 }
@@ -22,6 +23,7 @@ function Carregando() {
 
 export function RotaProtegida({ children, niveis }: Props) {
   const { session, funcionario, carregando } = useAuth();
+  const modulo = useModuloOpcional();
 
   if (carregando) {
     return <Carregando />;
@@ -35,7 +37,8 @@ export function RotaProtegida({ children, niveis }: Props) {
     // Logado, mas o cadastro do funcionário (e seu nível) ainda está sendo carregado.
     if (!funcionario) return <Carregando />;
     if (!nivelPermitido(funcionario.role, niveis)) {
-      return <Navigate to={rotaInicial(funcionario.role)} replace />;
+      // Sem permissão: volta para a tela inicial do nível dentro do módulo atual (ou para a seleção de módulo).
+      return <Navigate to={modulo ? rotaInicial(funcionario.role, modulo.base) : "/modulos"} replace />;
     }
   }
 

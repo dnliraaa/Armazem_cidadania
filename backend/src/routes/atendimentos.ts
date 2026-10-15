@@ -18,6 +18,7 @@ import {
   resolverNaRecepcao,
 } from "../controllers/atendimentosController.js";
 import { exigirAutenticacao, exigirNivel } from "../middleware/auth.js";
+import { resolverContextoModulo } from "../middleware/contexto.js";
 
 const router = Router();
 
@@ -27,7 +28,7 @@ const router = Router();
 //    O nível núcleo fica restrito ao próprio núcleo + unidade nas rotas
 //    `/pendentes/:id` (ver `exigirPendenteAcessivel`) e nas listagens;
 //  - cadastro manual de pendente e confirmação em lote: só acesso amplo.
-router.use(exigirAutenticacao);
+router.use(exigirAutenticacao, resolverContextoModulo);
 
 const nucleoOuAmplo = exigirNivel("amplo", "nucleo");
 

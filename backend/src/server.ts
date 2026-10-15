@@ -2,18 +2,24 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { env } from "./config/env.js";
+import acoesItinerantesRouter from "./routes/acoesItinerantes.js";
 import atendimentosRouter from "./routes/atendimentos.js";
 import cidadaosRouter from "./routes/cidadaos.js";
 import demandasRouter from "./routes/demandas.js";
 import filaRouter from "./routes/fila.js";
 import funcionariosRouter from "./routes/funcionarios.js";
 import meRouter from "./routes/me.js";
+import modulosRouter from "./routes/modulos.js";
 import nucleosRouter from "./routes/nucleos.js";
 import painelRouter from "./routes/painel.js";
+import servicosExternosRouter from "./routes/servicosExternos.js";
 import totensRouter from "./routes/totens.js";
 import unidadesRouter from "./routes/unidades.js";
 
 const app = express();
+
+// Atrás do Nginx: confia no primeiro proxy para enxergar o IP real e o protocolo (X-Forwarded-*).
+app.set("trust proxy", 1);
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(
@@ -29,6 +35,8 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api/me", meRouter);
+app.use("/api/modulos-disponiveis", modulosRouter);
+app.use("/api/acoes-itinerantes", acoesItinerantesRouter);
 app.use("/api/funcionarios", funcionariosRouter);
 app.use("/api/cidadaos", cidadaosRouter);
 app.use("/api/nucleos", nucleosRouter);
@@ -36,6 +44,7 @@ app.use("/api/demandas", demandasRouter);
 app.use("/api/atendimentos", atendimentosRouter);
 app.use("/api/fila", filaRouter);
 app.use("/api/painel", painelRouter);
+app.use("/api/servicos-externos", servicosExternosRouter);
 app.use("/api/unidades", unidadesRouter);
 app.use("/api/totens", totensRouter);
 
@@ -44,6 +53,6 @@ app.use((_req, res) => {
   res.status(404).json({ erro: "Rota não encontrada." });
 });
 
-app.listen(env.port, () => {
-  console.log(`API do Armazém da Cidadania rodando em http://localhost:${env.port}`);
+app.listen(env.port, env.host, () => {
+  console.log(`API do Armazém da Cidadania rodando em http://${env.host}:${env.port}`);
 });

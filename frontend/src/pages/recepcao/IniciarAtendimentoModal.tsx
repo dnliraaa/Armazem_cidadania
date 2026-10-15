@@ -6,9 +6,10 @@ import { formatarCodigoSenha } from "../fila/filaUtils";
 import { CidadaoFormModal, type ValoresIniciaisCidadao } from "../cidadaos/CidadaoFormModal";
 
 interface Props {
-  senha: Senha;
+  /** Senha chamada que originou o atendimento; sem ela, o atendimento é iniciado direto (sem senha). */
+  senha?: Senha | null;
   onFechar: () => void;
-  /** Chamado depois que o encaminhamento foi criado e a senha marcada como atendida. */
+  /** Chamado depois que o encaminhamento foi criado (e a senha, se houver, marcada como atendida). */
   onConcluido: () => void;
 }
 
@@ -79,13 +80,13 @@ export function IniciarAtendimentoModal({ senha, onFechar, onConcluido }: Props)
       if (resolvidaRecepcao) {
         // Resolvida na própria recepção: só registra o atendimento, sem encaminhar a núcleo.
         await api.post("/atendimentos/resolvido-recepcao", {
-          senha_id: senha.id,
+          senha_id: senha?.id,
           cidadao_id: cidadaoDestino.id,
           descricao: descricaoRecepcao.trim(),
         });
       } else {
         await api.post("/atendimentos/encaminhar", {
-          senha_id: senha.id,
+          senha_id: senha?.id,
           cidadao_id: cidadaoDestino.id,
           nucleo_id: nucleoId,
           prioridade,
@@ -161,7 +162,7 @@ export function IniciarAtendimentoModal({ senha, onFechar, onConcluido }: Props)
   return (
     <div className="modal-fundo" onClick={onFechar}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Iniciar atendimento — {formatarCodigoSenha(senha)}</h2>
+        <h2>{senha ? `Iniciar atendimento — ${formatarCodigoSenha(senha)}` : "Novo atendimento"}</h2>
 
         {erro && <div className="alerta-erro">{erro}</div>}
 
@@ -210,9 +211,11 @@ export function IniciarAtendimentoModal({ senha, onFechar, onConcluido }: Props)
               <div className="cartao" style={{ marginTop: "1rem" }}>
                 <p style={{ margin: 0 }}>
                   <strong>{cidadaoEncontrado.nome}</strong>
+                  {cidadaoEncontrado.nome_social && ` (nome social: ${cidadaoEncontrado.nome_social})`}
                 </p>
                 <p style={{ margin: "0.25rem 0 0.75rem", color: "var(--cor-texto-suave)" }}>
                   Nascimento: {formatarDataBr(cidadaoEncontrado.data_nascimento)}
+                  {cidadaoEncontrado.nome_mae && ` • Mãe: ${cidadaoEncontrado.nome_mae}`}
                 </p>
                 <button className="btn btn-primario" onClick={() => selecionarCidadao(cidadaoEncontrado, "cpf")}>
                   Iniciar encaminhamento
@@ -301,7 +304,12 @@ export function IniciarAtendimentoModal({ senha, onFechar, onConcluido }: Props)
                       }}
                     >
                       <span>
-                        <strong>{c.nome}</strong> — {formatarDataBr(c.data_nascimento)}
+                        <strong>{c.nome}</strong>
+                        {c.nome_social && ` (nome social: ${c.nome_social})`} — {formatarDataBr(c.data_nascimento)}
+                        <br />
+                        <span style={{ fontSize: "0.85rem", color: "var(--cor-texto-suave)" }}>
+                          Mãe: {c.nome_mae || "não informada"}
+                        </span>
                       </span>
                       <button className="btn btn-primario" onClick={() => selecionarCidadao(c, "nome")}>
                         Iniciar encaminhamento

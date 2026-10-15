@@ -30,6 +30,38 @@ function validarCpfPorNivel(
   }
 }
 
+/**
+ * Regras de módulo (Armazém / Itinerante) do funcionário:
+ *  - o admin acessa os dois sempre (as marcações não importam);
+ *  - os demais precisam de ao menos um acesso marcado;
+ *  - a unidade só é exigida quando o acesso ao Armazém está marcado (no Itinerante a
+ *    ação itinerante substitui a unidade). Na edição, flags ausentes = não validar;
+ *  - o núcleo é obrigatório para o nível 'nucleo', sempre.
+ */
+function validarModulos(
+  data: { role?: string; acesso_armazem?: boolean; acesso_itinerante?: boolean; unidade_id?: string | null },
+  ctx: z.RefinementCtx,
+  parcial: boolean
+) {
+  if (data.role === "admin") return;
+
+  // Na criação, o padrão é Armazém marcado e Itinerante desmarcado.
+  const armazem = data.acesso_armazem ?? (parcial ? undefined : true);
+  const itinerante = data.acesso_itinerante ?? (parcial ? undefined : false);
+
+  if (armazem === false && itinerante === false) {
+    ctx.addIssue({ code: "custom", message: "Marque ao menos um módulo de acesso.", path: ["acesso_armazem"] });
+  }
+  if (data.role && NIVEIS_COM_UNIDADE.includes(data.role) && armazem !== false && !data.unidade_id) {
+    ctx.addIssue({ code: "custom", message: "Selecione a unidade para este nível.", path: ["unidade_id"] });
+  }
+}
+
+const camposModulos = {
+  acesso_armazem: z.boolean().optional(),
+  acesso_itinerante: z.boolean().optional(),
+};
+
 const criarFuncionarioSchema = z
   .object({
     nome: z.string().trim().min(3, "Informe o nome completo."),
@@ -39,12 +71,10 @@ const criarFuncionarioSchema = z
     role: z.enum(["admin", "recepcao", "nucleo", "infraestrutura"]).default("admin"),
     unidade_id: z.string().uuid("Unidade inválida.").nullable().optional(),
     nucleo_id: z.string().uuid("Núcleo inválido.").nullable().optional(),
+    ...camposModulos,
   })
   .superRefine((data, ctx) => validarCpfPorNivel(data, ctx, false))
-  .refine((data) => !NIVEIS_COM_UNIDADE.includes(data.role ?? "") || Boolean(data.unidade_id), {
-    message: "Selecione a unidade para este nível.",
-    path: ["unidade_id"],
-  })
+  .superRefine((data, ctx) => validarModulos(data, ctx, false))
   .refine((data) => data.role !== "nucleo" || Boolean(data.nucleo_id), {
     message: "Selecione o núcleo para o nível núcleo.",
     path: ["nucleo_id"],
@@ -59,12 +89,10 @@ const atualizarFuncionarioSchema = z
     role: z.enum(["admin", "recepcao", "nucleo", "infraestrutura"]).optional(),
     unidade_id: z.string().uuid("Unidade inválida.").nullable().optional(),
     nucleo_id: z.string().uuid("Núcleo inválido.").nullable().optional(),
+    ...camposModulos,
   })
   .superRefine((data, ctx) => validarCpfPorNivel(data, ctx, true))
-  .refine((data) => !NIVEIS_COM_UNIDADE.includes(data.role ?? "") || Boolean(data.unidade_id), {
-    message: "Selecione a unidade para este nível.",
-    path: ["unidade_id"],
-  })
+  .superRefine((data, ctx) => validarModulos(data, ctx, true))
   .refine((data) => data.role !== "nucleo" || Boolean(data.nucleo_id), {
     message: "Selecione o núcleo para o nível núcleo.",
     path: ["nucleo_id"],
@@ -83,7 +111,7 @@ export async function listarFuncionarios(_req: Request, res: Response) {
   const { data, error } = await supabaseAdmin
     .from("funcionarios")
     .select(
-      "id, nome, cpf, email, role, unidade_id, nucleo_id, ativo, created_at, updated_at, unidades!funcionarios_unidade_id_fkey(nome), nucleos!funcionarios_nucleo_id_fkey(nome)"
+      "id, nome, cpf, email, role, unidade_id, nucleo_id, acesso_armazem, acesso_itinerante, ativo, created_at, updated_at, unidades!funcionarios_unidade_id_fkey(nome), nucleos!funcionarios_nucleo_id_fkey(nome)"
     )
     .order("nome", { ascending: true });
 
@@ -111,7 +139,12 @@ export async function criarFuncionario(req: Request, res: Response) {
   const { nome, email, senha, role } = parse.data;
   // Infraestrutura pode não ter CPF: grava null (nunca string vazia, que colidiria no índice único).
   const cpf = parse.data.cpf?.trim() ? somenteDigitos(parse.data.cpf) : null;
-  const unidadeId = NIVEIS_COM_UNIDADE.includes(role) ? parse.data.unidade_id ?? null : null;
+  // Admin acessa os dois módulos sempre; os demais seguem o que foi marcado (padrão: só o Armazém).
+  const acessoArmazem = role === "admin" ? true : parse.data.acesso_armazem ?? true;
+  const acessoItinerante = role === "admin" ? true : parse.data.acesso_itinerante ?? false;
+  // A unidade só vale quando há acesso ao Armazém (no Itinerante a ação substitui a unidade).
+  const unidadeId =
+    NIVEIS_COM_UNIDADE.includes(role) && acessoArmazem ? parse.data.unidade_id ?? null : null;
   const nucleoId = role === "nucleo" ? parse.data.nucleo_id ?? null : null;
 
   // Verifica duplicidade de CPF antes de criar o usuário no Auth (só quando informado)
@@ -144,8 +177,19 @@ export async function criarFuncionario(req: Request, res: Response) {
   // 2) Cria o registro em public.funcionarios
   const { data: funcionario, error: erroFuncionario } = await supabaseAdmin
     .from("funcionarios")
-    .insert({ id: authData.user.id, nome, cpf, email, role, unidade_id: unidadeId, nucleo_id: nucleoId, ativo: true })
-    .select("id, nome, cpf, email, role, unidade_id, nucleo_id, ativo, created_at, updated_at")
+    .insert({
+      id: authData.user.id,
+      nome,
+      cpf,
+      email,
+      role,
+      unidade_id: unidadeId,
+      nucleo_id: nucleoId,
+      acesso_armazem: acessoArmazem,
+      acesso_itinerante: acessoItinerante,
+      ativo: true,
+    })
+    .select("id, nome, cpf, email, role, unidade_id, nucleo_id, acesso_armazem, acesso_itinerante, ativo, created_at, updated_at")
     .single();
 
   if (erroFuncionario) {
@@ -172,8 +216,14 @@ export async function atualizarFuncionario(req: Request, res: Response) {
   if (atualizacoes.role === "admin") {
     atualizacoes.unidade_id = null;
     atualizacoes.nucleo_id = null;
+    atualizacoes.acesso_armazem = true;
+    atualizacoes.acesso_itinerante = true;
   } else if (atualizacoes.role === "recepcao" || atualizacoes.role === "infraestrutura") {
     atualizacoes.nucleo_id = null;
+  }
+  // Sem acesso ao Armazém não há unidade (no Itinerante a ação substitui a unidade).
+  if (atualizacoes.role !== "admin" && atualizacoes.acesso_armazem === false) {
+    atualizacoes.unidade_id = null;
   }
 
   // CPF vazio (só possível para infraestrutura) vira null; ausente = não altera.
@@ -210,7 +260,7 @@ export async function atualizarFuncionario(req: Request, res: Response) {
     .from("funcionarios")
     .update(atualizacoes)
     .eq("id", id)
-    .select("id, nome, cpf, email, role, unidade_id, nucleo_id, ativo, created_at, updated_at")
+    .select("id, nome, cpf, email, role, unidade_id, nucleo_id, acesso_armazem, acesso_itinerante, ativo, created_at, updated_at")
     .single();
 
   if (error) {

@@ -12,10 +12,14 @@ export function nivelPermitido(nivel: string, niveis: readonly string[]): boolea
   return niveis.includes(nivel) || (niveis.includes("amplo") && ehNivelAmplo(nivel));
 }
 
-/** Tela inicial de cada nível. */
-export function rotaInicial(nivel: string): string {
-  if (nivel === "recepcao") return "/recepcao";
-  if (nivel === "nucleo") return "/fila-nucleo";
-  if (nivel === "infraestrutura") return "/infraestrutura";
-  return "/cidadaos";
+/**
+ * Tela inicial de cada nível dentro de um módulo. `base` é o prefixo do módulo
+ * ("/armazem" ou "/itinerante"). No Itinerante o acesso amplo abre em Ações
+ * Itinerantes; no Armazém, em Cidadãos.
+ */
+export function rotaInicial(nivel: string, base: string): string {
+  if (nivel === "recepcao") return `${base}/recepcao`;
+  if (nivel === "nucleo") return `${base}/fila-nucleo`;
+  if (nivel === "infraestrutura") return `${base}/infraestrutura`;
+  return base === "/itinerante" ? `${base}/acoes` : `${base}/cidadaos`;
 }
