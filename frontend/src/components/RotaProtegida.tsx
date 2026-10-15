@@ -21,8 +21,36 @@ function Carregando() {
   );
 }
 
+function ErroCadastro() {
+  const { recarregarFuncionario, sair } = useAuth();
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        minHeight: "100vh",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "1rem",
+        padding: "1.5rem",
+        textAlign: "center",
+      }}
+    >
+      <div className="alerta-erro">Não foi possível carregar o seu cadastro. Verifique a conexão e tente novamente.</div>
+      <div style={{ display: "flex", gap: "0.75rem" }}>
+        <button className="btn btn-primario" onClick={() => void recarregarFuncionario()}>
+          Tentar de novo
+        </button>
+        <button className="btn" onClick={() => void sair()}>
+          Sair
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function RotaProtegida({ children, niveis }: Props) {
-  const { session, funcionario, carregando } = useAuth();
+  const { session, funcionario, carregando, erroFuncionario } = useAuth();
   const modulo = useModuloOpcional();
 
   if (carregando) {
@@ -31,6 +59,10 @@ export function RotaProtegida({ children, niveis }: Props) {
 
   if (!session) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (erroFuncionario) {
+    return <ErroCadastro />;
   }
 
   if (niveis) {

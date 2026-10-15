@@ -8,6 +8,8 @@ interface AuthContextValue {
   session: Session | null;
   funcionario: Funcionario | null;
   carregando: boolean;
+  erroFuncionario: boolean;
+  recarregarFuncionario: () => Promise<void>;
   entrar: (email: string, senha: string) => Promise<void>;
   sair: () => Promise<void>;
 }
@@ -19,14 +21,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [funcionario, setFuncionario] = useState<Funcionario | null>(null);
   const [carregando, setCarregando] = useState(true);
 
+  const [buscandoFuncionario, setBuscandoFuncionario] = useState(false);
+
   async function carregarFuncionario() {
+    setBuscandoFuncionario(true);
     try {
       const dados = await api.get<Funcionario>("/me");
       setFuncionario(dados);
     } catch {
       setFuncionario(null);
+    } finally {
+      setBuscandoFuncionario(false);
     }
   }
+
+  // Há sessão, mas o cadastro do funcionário não veio (API fora do ar, token vencido...).
+  const erroFuncionario = !carregando && !buscandoFuncionario && Boolean(session) && !funcionario;
 
   useEffect(() => {
     supabase.auth
@@ -48,6 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Por isso o trabalho é adiado com setTimeout.
     const { data: listener } = supabase.auth.onAuthStateChange((_event, novaSession) => {
       setSession(novaSession);
+      if (novaSession) setBuscandoFuncionario(true);
       setTimeout(() => {
         if (novaSession) {
           void carregarFuncionario();
@@ -75,7 +86,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, funcionario, carregando, entrar, sair }}>
+    <AuthContext.Provider
+      value={{ session, funcionario, carregando, erroFuncionario, recarregarFuncionario: carregarFuncionario, entrar, sair }}
+    >
       {children}
     </AuthContext.Provider>
   );
