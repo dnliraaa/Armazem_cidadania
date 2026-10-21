@@ -141,6 +141,40 @@ a {
   padding: 1.25rem;
 }
 
+/* Tela de login: fundo.png preenchendo a tela toda (cover). */
+.login-tela {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  position: relative;
+  overflow: hidden;
+  background-color: #0b2a6b;
+}
+
+.login-fundo {
+  position: absolute;
+  inset: 0;
+  background-image: var(--login-fundo);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.login-cartao {
+  width: 100%;
+  max-width: 380px;
+  position: relative;
+}
+
+/* Tela em pé (celular): mantém o fundo atrás do card, focando no Cristo */
+@media (orientation: portrait) {
+  .login-fundo {
+    background-position: 75% center;
+  }
+}
+
 .tabela-responsiva {
   width: 100%;
   overflow-x: auto;

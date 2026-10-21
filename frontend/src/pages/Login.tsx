@@ -1,6 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useState, type CSSProperties, type FormEvent } from "react";
 import { Navigate } from "react-router-dom";
-import logoAzul from "../assets/logo.png";
+import fundo from "../assets/fundo.png";
+import logoArmazem from "../assets/logo.png";
+import logoRio from "../assets/rio.png";
 import { useAuth } from "../contexts/AuthContext";
 
 export function Login() {
@@ -28,19 +30,13 @@ export function Login() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "1.5rem",
-      }}
-    >
-      <div className="cartao" style={{ width: "100%", maxWidth: 380 }}>
+    <div className="login-tela" style={{ "--login-fundo": `url(${fundo})` } as CSSProperties}>
+      <div className="login-fundo" aria-hidden />
+      <div className="cartao login-cartao">
         <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
-          <img src={logoAzul} alt="Armazém da Cidadania" style={{ height: 120, maxWidth: "100%", width: "auto", marginBottom: "0.5rem" }} />
-          <h1 style={{ fontSize: "1.3rem", margin: "0.5rem 0 0.15rem" }}>Armazém da Cidadania</h1>
+          <h1 style={{ margin: "0 0 0.25rem" }}>
+            <img src={logoArmazem} alt="Armazém da Cidadania" style={{ height: 170, maxWidth: "100%", width: "auto" }} />
+          </h1>
           <p style={{ color: "var(--cor-texto-suave)", fontSize: "0.9rem", margin: 0 }}>
             Acesso restrito a funcionários
           </p>
@@ -79,6 +75,21 @@ export function Login() {
             {enviando ? "Entrando…" : "Entrar"}
           </button>
         </form>
+
+        <div
+          style={{
+            borderTop: "1px solid var(--cor-borda, #e5e7eb)",
+            marginTop: "1.5rem",
+            paddingTop: "1.25rem",
+            textAlign: "center",
+          }}
+        >
+          <img
+            src={logoRio}
+            alt="Prefeitura do Rio — Secretaria de Cidadania e Família"
+            style={{ height: 44, maxWidth: "100%", width: "auto" }}
+          />
+        </div>
       </div>
     </div>
   );
