@@ -1,7 +1,9 @@
 :root {
-  --cor-primaria: #1d4ed8;
-  --cor-primaria-escura: #1e3a8a;
-  --cor-fundo: #f4f6fb;
+  /* Paleta da Prefeitura do Rio: azul-marinho das logos e ciano do brasão */
+  --cor-primaria: #00418a;
+  --cor-primaria-escura: #002858;
+  --cor-destaque: #00a8e0;
+  --cor-fundo: #f3f6fa;
   --cor-superficie: #ffffff;
   --cor-borda: #e2e8f0;
   --cor-texto: #1e293b;
@@ -150,7 +152,7 @@ a {
   padding: 1.5rem;
   position: relative;
   overflow: hidden;
-  background-color: #0b2a6b;
+  background-color: var(--cor-primaria-escura);
 }
 
 .login-fundo {

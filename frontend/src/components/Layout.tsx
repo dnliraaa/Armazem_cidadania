@@ -56,7 +56,7 @@ export function Layout() {
       )
     : [];
 
-  const nomeModulo = modulo === "armazem" ? "Armazém da Cidadania" : "Armazém Itinerante";
+  const nomeModulo = modulo === "armazem" ? "Cidadania Presente" : "Cidadania Itinerante";
 
   return (
     <div className="app-shell">
@@ -75,7 +75,7 @@ export function Layout() {
           <img src={logoBranca} alt="Armazém da Cidadania" />
         </div>
 
-        {/* Em qual módulo (e ação) o usuário está, com atalho para trocar. */}
+        {/* Em qual módulo (e ação) o usuário está; o botão de trocar fica no rodapé. */}
         <div
           style={{
             margin: "0 0.75rem 0.75rem",
@@ -90,14 +90,6 @@ export function Layout() {
           {modulo === "itinerante" && (
             <div style={{ opacity: 0.85, marginTop: "0.15rem" }}>{acao?.nome ?? "Todas as ações"}</div>
           )}
-          <button
-            type="button"
-            className="btn btn-sair"
-            style={{ marginTop: "0.5rem", width: "100%" }}
-            onClick={() => navigate("/modulos?trocar=1")}
-          >
-            Trocar módulo
-          </button>
         </div>
 
         <nav className="sidebar-nav">
@@ -118,6 +110,14 @@ export function Layout() {
             <strong>{funcionario?.nome}</strong>
             <span>{funcionario?.email}</span>
           </div>
+          <button
+            type="button"
+            className="btn btn-sair"
+            style={{ marginBottom: "0.5rem" }}
+            onClick={() => navigate("/modulos?trocar=1")}
+          >
+            Trocar módulo
+          </button>
           <button className="btn btn-sair" onClick={sair}>
             Sair
           </button>

@@ -32,14 +32,14 @@ export async function resolverContextoModulo(req: Request, res: Response, next: 
 
   if (moduloHeader === "armazem") {
     if (!admin && !funcionario.acesso_armazem) {
-      return res.status(403).json({ erro: "Você não tem acesso ao Armazém da Cidadania.", codigo: "SEM_ACESSO_MODULO" });
+      return res.status(403).json({ erro: "Você não tem acesso ao módulo Cidadania Presente.", codigo: "SEM_ACESSO_MODULO" });
     }
     req.contexto = { modulo: "armazem", acaoId: null };
     return next();
   }
 
   if (!admin && !funcionario.acesso_itinerante) {
-    return res.status(403).json({ erro: "Você não tem acesso ao Armazém Itinerante.", codigo: "SEM_ACESSO_MODULO" });
+    return res.status(403).json({ erro: "Você não tem acesso ao módulo Cidadania Itinerante.", codigo: "SEM_ACESSO_MODULO" });
   }
 
   const acaoHeader = req.header("x-acao-id");

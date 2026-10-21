@@ -155,7 +155,7 @@ export function FuncionarioFormModal({ funcionario, onFechar, onSalvo }: Props) 
                   checked={acessoArmazem}
                   onChange={(e) => setAcessoArmazem(e.target.checked)}
                 />
-                Armazém da Cidadania
+                Cidadania Presente
               </label>
               <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 400 }}>
                 <input
@@ -163,7 +163,7 @@ export function FuncionarioFormModal({ funcionario, onFechar, onSalvo }: Props) 
                   checked={acessoItinerante}
                   onChange={(e) => setAcessoItinerante(e.target.checked)}
                 />
-                Armazém Itinerante
+                Cidadania Itinerante
               </label>
               {nivelComUnidade && !acessoArmazem && (
                 <span style={{ fontSize: "0.8rem", color: "var(--cor-texto-suave)" }}>

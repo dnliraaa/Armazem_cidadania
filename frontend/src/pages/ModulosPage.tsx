@@ -127,7 +127,7 @@ export function ModulosPage() {
           {dados.armazem && (
             <div className="cartao" style={estiloCartao}>
               <h2 style={{ margin: 0 }}>
-                <img src={imgPresente} alt="Cidadania Presente — Armazém da Cidadania" style={estiloImagemCartao} />
+                <img src={imgPresente} alt="Cidadania Presente" style={estiloImagemCartao} />
               </h2>
               <p style={{ color: "var(--cor-texto-suave)" }}>Atendimento nas unidades.</p>
               <button className="btn btn-primario" onClick={entrarArmazem}>
@@ -139,7 +139,7 @@ export function ModulosPage() {
           {dados.itinerante.acesso && (
             <div className="cartao" style={{ ...estiloCartao, opacity: itineranteOk ? 1 : 0.7 }}>
               <h2 style={{ margin: 0 }}>
-                <img src={imgItinerante} alt="Cidadania Itinerante — Armazém Itinerante" style={estiloImagemCartao} />
+                <img src={imgItinerante} alt="Cidadania Itinerante" style={estiloImagemCartao} />
               </h2>
               <p style={{ color: "var(--cor-texto-suave)" }}>
                 {itineranteOk

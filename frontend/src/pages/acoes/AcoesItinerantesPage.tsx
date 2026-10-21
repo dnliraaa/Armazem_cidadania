@@ -63,7 +63,7 @@ export function AcoesItinerantesPage() {
       <div className="pagina-cabecalho">
         <div>
           <h1>Ações Itinerantes</h1>
-          <p>Ações do Armazém Itinerante. Cada ação tem seus próprios totens, senhas, filas e atendimentos.</p>
+          <p>Ações do Cidadania Itinerante. Cada ação tem seus próprios totens, senhas, filas e atendimentos.</p>
         </div>
         <button className="btn btn-primario" onClick={() => setModalForm({ aberto: true, acao: null })}>
           + Nova ação

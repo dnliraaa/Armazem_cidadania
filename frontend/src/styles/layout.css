@@ -62,6 +62,7 @@
 .sidebar-nav a.ativo {
   background: #fff;
   color: var(--cor-primaria-escura);
+  box-shadow: inset 4px 0 0 var(--cor-destaque);
 }
 
 .sidebar-nav .em-breve {
