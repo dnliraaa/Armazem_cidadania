@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import logoAzul from "../assets/logo.png";
+import imgPresente from "../assets/cidadaniaPresente.png";
+import imgItinerante from "../assets/cidadaniaItinerante.png";
 import { salvarAcao } from "../contexts/ModuloContext";
 import { useAuth } from "../contexts/AuthContext";
 import { api, ApiError } from "../lib/api";
@@ -13,6 +14,14 @@ const estiloCartao = {
   maxWidth: 340,
   textAlign: "center",
   padding: "2rem 1.5rem",
+} as const;
+
+const estiloImagemCartao = {
+  display: "block",
+  width: "100%",
+  height: 190,
+  objectFit: "contain",
+  margin: "0 auto 1rem",
 } as const;
 
 function periodo(a: Pick<AcaoItinerante, "data_inicio" | "data_fim">): string {
@@ -106,7 +115,6 @@ export function ModulosPage() {
         position: "relative",
       }}
     >
-      <img src={logoAzul} alt="Armazém da Cidadania" style={{ height: 110, maxWidth: "80%", width: "auto" }} />
       <h1 style={{ margin: 0, fontSize: "1.4rem" }}>
         {escolhendoAcao ? "Escolha a ação itinerante" : "Escolha o módulo"}
       </h1>
@@ -118,7 +126,9 @@ export function ModulosPage() {
         <div style={{ display: "flex", gap: "1.25rem", flexWrap: "wrap", justifyContent: "center", width: "100%" }}>
           {dados.armazem && (
             <div className="cartao" style={estiloCartao}>
-              <h2 style={{ marginTop: 0 }}>Armazém da Cidadania</h2>
+              <h2 style={{ margin: 0 }}>
+                <img src={imgPresente} alt="Cidadania Presente — Armazém da Cidadania" style={estiloImagemCartao} />
+              </h2>
               <p style={{ color: "var(--cor-texto-suave)" }}>Atendimento nas unidades.</p>
               <button className="btn btn-primario" onClick={entrarArmazem}>
                 Entrar
@@ -128,7 +138,9 @@ export function ModulosPage() {
 
           {dados.itinerante.acesso && (
             <div className="cartao" style={{ ...estiloCartao, opacity: itineranteOk ? 1 : 0.7 }}>
-              <h2 style={{ marginTop: 0 }}>Armazém Itinerante</h2>
+              <h2 style={{ margin: 0 }}>
+                <img src={imgItinerante} alt="Cidadania Itinerante — Armazém Itinerante" style={estiloImagemCartao} />
+              </h2>
               <p style={{ color: "var(--cor-texto-suave)" }}>
                 {itineranteOk
                   ? acoes.length > 0
