@@ -242,7 +242,7 @@ export function RecepcaoPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1.25rem" }}>
           <div className="cartao">
             <h3 style={{ marginTop: 0 }}>
-              Aguardando — Normal{" "}
+              Aguardando — Geral{" "}
               <span className="badge badge-ativo">{fila?.aguardando.totalNormal ?? 0}</span>
             </h3>
             {fila && fila.aguardando.normal.length > 0 ? (

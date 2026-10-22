@@ -39,7 +39,7 @@ function unidadeSolicitada(req: Request): string | null {
 const PROPORCAO_NORMAIS_POR_PRIORITARIA = 1;
 
 const retirarSenhaSchema = z.object({
-  tipo: z.enum(["normal", "prioritaria"]),
+  tipo: z.enum(["geral", "prioritaria"]),
   totem_id: z.string().uuid("Totem inválido."),
 });
 
@@ -162,7 +162,7 @@ export async function listarFila(req: Request, res: Response) {
     return res.status(500).json({ erro: "Não foi possível carregar a fila." });
   }
 
-  const aguardandoNormal = (aguardando ?? []).filter((s) => s.tipo === "normal");
+  const aguardandoNormal = (aguardando ?? []).filter((s) => s.tipo === "geral");
   const aguardandoPrioritaria = (aguardando ?? []).filter((s) => s.tipo === "prioritaria");
 
   res.json({
@@ -217,7 +217,7 @@ export async function proximaSenhaSugerida(req: Request, res: Response) {
   let consultaNormal = aplicarEscopo(supabaseAdmin.from("senhas").select("*"), ctx)
     .eq("data", dataHoje)
     .eq("status", "aguardando")
-    .eq("tipo", "normal")
+    .eq("tipo", "geral")
     .or(NAO_TRAVADA_EM_RECALL)
     .order("criada_em", { ascending: true })
     .limit(1);
@@ -324,7 +324,7 @@ export async function proximaSenhaSugerida(req: Request, res: Response) {
     ctx
   )
     .eq("data", dataHoje)
-    .eq("tipo", "normal")
+    .eq("tipo", "geral")
     .not("chamada_em", "is", null);
 
   if (unidadeId) {

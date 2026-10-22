@@ -28,9 +28,9 @@ function hoje(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Código exibido da senha: "N012" (normal) ou "P003" (prioritária). */
+/** Código exibido da senha: "G012" (atendimento geral) ou "P003" (prioritária). */
 function codigoSenha(tipo: string, numero: number): string {
-  return `${tipo === "normal" ? "N" : "P"}${String(numero).padStart(3, "0")}`;
+  return `${tipo === "geral" ? "G" : "P"}${String(numero).padStart(3, "0")}`;
 }
 
 /**

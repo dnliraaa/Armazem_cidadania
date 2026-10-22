@@ -321,7 +321,7 @@ export function FilaNucleoPage() {
                         {p.prioridade ? (
                           <span className="badge badge-alerta">Prioridade</span>
                         ) : (
-                          <span className="badge badge-inativo">Normal</span>
+                          <span className="badge badge-inativo">Geral</span>
                         )}
                       </td>
                     </tr>

@@ -169,7 +169,7 @@ export interface Atendimento {
 export interface Senha {
   id: string;
   data: string;
-  tipo: "normal" | "prioritaria";
+  tipo: "geral" | "prioritaria";
   numero: number;
   status: "aguardando" | "chamada" | "atendida" | "perdida";
   guiche: string | null;

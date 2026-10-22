@@ -48,19 +48,24 @@ const estiloTela: CSSProperties = {
 
 function estiloBotaoGrande(cor: string): CSSProperties {
   return {
-    width: "min(280px, 40vw)",
-    height: "min(280px, 40vw)",
-    minWidth: 180,
-    minHeight: 180,
+    flex: "1 1 320px",
+    maxWidth: 460,
+    minHeight: "min(240px, 32vh)",
+    padding: "1.5rem",
     borderRadius: 24,
     border: "none",
     background: cor,
     color: "#fff",
-    fontSize: "1.6rem",
+    fontSize: "clamp(1.3rem, 2.4vw, 1.9rem)",
     fontWeight: 800,
-    lineHeight: 1.3,
+    lineHeight: 1.25,
     cursor: "pointer",
     boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "1rem",
   };
 }
 
@@ -148,7 +153,7 @@ export function TotemPage() {
   const chave = chaveTotem(modulo, acao?.id ?? null);
   const [totemId, setTotemId] = useState<string | null>(() => lerTotemSalvo(chave));
   const [totemNome, setTotemNome] = useState<string | null>(null);
-  const [enviando, setEnviando] = useState<"normal" | "prioritaria" | null>(null);
+  const [enviando, setEnviando] = useState<"geral" | "prioritaria" | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [senhaGerada, setSenhaGerada] = useState<Senha | null>(null);
 
@@ -192,7 +197,7 @@ export function TotemPage() {
     setTotemNome(null);
   }
 
-  async function retirar(tipo: "normal" | "prioritaria") {
+  async function retirar(tipo: "geral" | "prioritaria") {
     if (!totemId) return;
     setErro(null);
     setEnviando(tipo);
@@ -243,35 +248,22 @@ export function TotemPage() {
       />
       <h1 style={{ fontSize: "2.2rem", marginBottom: "0.5rem" }}>Retire sua senha</h1>
       <p style={{ color: "var(--cor-texto-suave)", fontSize: "1.05rem", maxWidth: 520, marginBottom: "2.5rem" }}>
-        Toque em um dos botões abaixo.
+        Selecione o tipo de atendimento desejado.
       </p>
 
       {erro && <div className="alerta-erro" style={{ marginBottom: "1.5rem" }}>{erro}</div>}
 
-      <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap", justifyContent: "center" }}>
-        <button disabled={enviando !== null} onClick={() => retirar("normal")} style={estiloBotaoGrande("var(--cor-primaria)")}>
-          {enviando === "normal" ? "Gerando…" : (
-            <>
-              SENHA
-              <br />
-              NORMAL
-            </>
-          )}
+      <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", justifyContent: "center", width: "100%", maxWidth: 960 }}>
+        <button disabled={enviando !== null} onClick={() => retirar("geral")} style={estiloBotaoGrande("var(--cor-primaria)")}>
+          {enviando === "geral" ? "Gerando…" : "ATENDIMENTO GERAL"}
         </button>
         <button disabled={enviando !== null} onClick={() => retirar("prioritaria")} style={estiloBotaoGrande("#ea580c")}>
-          {enviando === "prioritaria" ? "Gerando…" : (
-            <>
-              SENHA
-              <br />
-              PRIORITÁRIA
-            </>
-          )}
+          {enviando === "prioritaria" ? "Gerando…" : "ATENDIMENTO PRIORITÁRIO"}
         </button>
       </div>
 
-      <p style={{ marginTop: "2.5rem", color: "var(--cor-texto-suave)", fontSize: "0.9rem", maxWidth: 560 }}>
-        Tem prioridade: pessoas idosas, gestantes, lactantes, pessoas com deficiência ou mobilidade reduzida, e
-        pessoas acompanhadas de criança de colo.
+      <p style={{ marginTop: "2rem", color: "var(--cor-texto-suave)", fontSize: "0.95rem", maxWidth: 560 }}>
+        Prioridade conforme a legislação vigente.
       </p>
 
       <div style={{ position: "absolute", bottom: 20, right: 20, display: "flex", gap: "0.5rem", alignItems: "center" }}>
